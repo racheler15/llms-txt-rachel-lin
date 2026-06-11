@@ -1,0 +1,61 @@
+.generator-container {
+  margin-bottom: 2.5rem;
+}
+
+.generator-heading {
+  font-size: 2rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  color: #111;
+}
+
+.generator-subtitle {
+  font-size: 1rem;
+  color: #454545;
+  margin-bottom: 1.5rem;
+}
+
+.generator-form {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.generator-form input {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  outline: none;
+  background: #fff;
+}
+
+.generator-form input:focus {
+  border-color: #888;
+}
+
+.generator-form button {
+  padding: 0.75rem 1.25rem;
+  font-size: 1rem;
+  background: #9db3e2;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.generator-form button:hover {
+  background: #a3bffa;
+}
+
+.generator-form button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.generator-error {
+  color: #dc2626;
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}

@@ -1,0 +1,8 @@
+# Covered by root .gitignore — kept for tooling that runs from this directory
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
