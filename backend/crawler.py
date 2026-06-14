@@ -1,110 +1,148 @@
-import hashlib
-import time
-from collections import deque
+import asyncio
+import logging
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 from urllib.robotparser import RobotFileParser
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
-from pydantic import BaseModel
 
-from constants import COMMON_DOC_PATHS
+from constants import (
+    COMMON_DOC_PATHS,
+    COMMON_OPTIONAL_PATHS,
+    DOC_PATH_BOOST,
+    HOMEPAGE_BOOST,
+    MAX_DEPTH,
+    SITEMAP_SEED_LIMIT,
+    TIER_2_CANDIDATES,
+)
+from models import Page
+from scoring import (
+    precrawl_url_score,
+    top_optional_sitemap_urls,
+    prioritize_sitemap_urls,
+    should_exclude_crawl_candidate,
+)
+from url_utils import (
+    content_hash,
+    is_internal_link,
+    normalize_url,
+    page_quality,
+    registrable_domain,
+    should_skip_url,
+    url_hash,
+)
 
-
-class Page(BaseModel):
-    url: str
-    title: str
-    description: str
-    h1: str
-    og_type: str
-    depth: int
-    content_hash: str
-
-
-MAX_DEPTH = 3
-MAX_PAGES = 50
-REQUEST_DELAY = 0.1
-TIMEOUT = 5
-
-
-def normalize_url(url: str) -> str:
-    """Lowercase host, strip trailing slash, sort and filter query params."""
-    parsed = urlparse(url)
-    scheme = parsed.scheme.lower()
-    netloc = parsed.netloc.lower()
-    path = parsed.path.rstrip("/") or "/"
-    params = parse_qs(parsed.query)
-    filtered_params = {k: v for k, v in params.items() if not k.startswith("utm_")}
-    query = urlencode(sorted(filtered_params.items()), doseq=True)
-    return urlunparse((scheme, netloc, path, "", query, ""))
+logger = logging.getLogger(__name__)
 
 
-def url_hash(url: str) -> str:
-    """Hash a URL string for dedup."""
-    return hashlib.md5(url.encode()).hexdigest()
+MAX_PAGES = 200
+MAIN_CRAWL_BUDGET = MAX_PAGES - TIER_2_CANDIDATES
+MAX_CONCURRENCY = 20
+TIMEOUT = 5.0
+DESCRIPTION_MAX_LENGTH = 320
 
 
-def content_hash(text: str) -> str:
-    """Hash page body text for content dedup."""
-    return hashlib.md5(text.strip().encode()).hexdigest()
+def _is_html_response(response: httpx.Response) -> bool:
+    content_type = response.headers.get("content-type", "").lower()
+    return "text/html" in content_type or "application/xhtml+xml" in content_type
 
 
-def _fetch_sitemap(sitemap_url: str) -> list[str]:
-    """Fetch a single sitemap file and return its <loc> URLs."""
-    try:
-        response = requests.get(sitemap_url, timeout=TIMEOUT)
-        if not response.ok:
-            return []
-        soup = BeautifulSoup(response.text, "lxml-xml")
-        return [loc.text.strip() for loc in soup.find_all("loc")]
-    except Exception:
-        return []
+def _meta_content(
+    soup: BeautifulSoup,
+    *,
+    name: str | None = None,
+    og_property: str | None = None,
+) -> str:
+    attrs: dict[str, str] = {}
+    if name:
+        attrs["name"] = name
+    if og_property:
+        attrs["property"] = og_property
+    # find first matching meta tag with the given attribute
+    tag = soup.find("meta", attrs=attrs)
+    return tag.get("content", "").strip() if tag else ""
 
 
-def get_sitemap_urls(base_url: str) -> list[str]:
-    """Fetch sitemap.xml and extract page URLs. Handles sitemap index files."""
-    sitemap_url = urljoin(base_url, "/sitemap.xml")
-    try:
-        response = requests.get(sitemap_url, timeout=TIMEOUT)
-        if not response.ok:
-            return []
-        soup = BeautifulSoup(response.text, "lxml-xml")
+def _truncate_at_boundary(text: str, max_len: int = DESCRIPTION_MAX_LENGTH) -> str:
+    """Truncate long text at a sentence or word boundary, adding ellipsis when clipped."""
+    text = text.strip()
+    if len(text) <= max_len:
+        return text
 
-        # Sitemap index — each <loc> points to another sitemap file
-        if soup.find("sitemapindex"):
-            urls = []
-            for loc in soup.find_all("loc"):
-                urls.extend(_fetch_sitemap(loc.text.strip()))
-            return urls
+    window = text[:max_len]
+    min_break = max_len // 2
 
-        # Regular sitemap — direct <loc> URLs
-        return [loc.text.strip() for loc in soup.find_all("loc")]
-    except Exception:
-        return []
+    for sep in (". ", "! ", "? "):
+        idx = window.rfind(sep)
+        if idx >= min_break:
+            return text[: idx + 1].strip()
+
+    last_space = window.rfind(" ")
+    if last_space > 0:
+        return text[:last_space].rstrip() + "..."
+
+    return window.rstrip() + "..."
 
 
-def extract_page_data(html: str, page_url: str, base_domain: str) -> dict:
-    """Extract title, description, h1, internal links from HTML."""
+def _first_meaningful_paragraph(soup: BeautifulSoup) -> str:
+    for paragraph in soup.find_all("p"):
+        text = paragraph.get_text(separator=" ", strip=True)
+        if len(text) >= 40:
+            return _truncate_at_boundary(text)
+    return ""
+
+
+def _build_title(soup: BeautifulSoup) -> str:
+    title_tag = soup.find("title")
+    title = title_tag.get_text(separator=" ", strip=True) if title_tag else ""
+    if title:
+        return title
+    og_title = _meta_content(soup, og_property="og:title")
+    if og_title:
+        return og_title
+    h1_tag = soup.find("h1")
+    return h1_tag.get_text(separator=" ", strip=True) if h1_tag else ""
+
+
+def _build_description(soup: BeautifulSoup, h1: str) -> str:
+    description = _meta_content(soup, name="description")
+    if description:
+        return _truncate_at_boundary(description)
+    og_description = _meta_content(soup, og_property="og:description")
+    if og_description:
+        return _truncate_at_boundary(og_description)
+    paragraph = _first_meaningful_paragraph(soup)
+    if paragraph:
+        return paragraph
+    if h1:
+        return h1
+    headings = soup.find_all(["h2", "h3"])
+    for heading in headings:
+        text = heading.get_text(separator=" ", strip=True)
+        if text:
+            return text
+    return ""
+
+
+def _extract_page_data(html: str, page_url: str, base_domain: str) -> dict:
+    """Extract title, description, headings, and internal links from HTML."""
     soup = BeautifulSoup(html, "lxml")
 
-    title_tag = soup.find("title")
-    title = title_tag.get_text(strip=True) if title_tag else ""
-
-    meta_desc = soup.find("meta", attrs={"name": "description"})
-    description = meta_desc.get("content", "").strip() if meta_desc else ""
-
-    robots_tag = soup.find("meta", attrs={"name": "robots"})
-    robots = robots_tag.get("content", "").lower() if robots_tag else ""
-    noindex = "noindex" in robots
+    robots = _meta_content(soup, name="robots").lower()
+    if "noindex" in robots:
+        # break out early, page is not indexable
+        return {"noindex": True}
 
     canonical_tag = soup.find("link", attrs={"rel": "canonical"})
     canonical = canonical_tag.get("href", "").strip() if canonical_tag else ""
 
-    og_type_tag = soup.find("meta", attrs={"property": "og:type"})
-    og_type = og_type_tag.get("content", "").strip().lower() if og_type_tag else ""
+    og_type = _meta_content(soup, og_property="og:type").lower()
 
     h1_tag = soup.find("h1")
-    h1 = h1_tag.get_text(strip=True) if h1_tag else ""
+    h1 = h1_tag.get_text(separator=" ", strip=True) if h1_tag else ""
+
+    title = _build_title(soup)
+    description = _build_description(soup, h1)
 
     body = soup.find("body")
     body_text = body.get_text(separator=" ", strip=True) if body else ""
@@ -112,101 +150,243 @@ def extract_page_data(html: str, page_url: str, base_domain: str) -> dict:
     internal_links = []
     for link in soup.find_all("a", href=True):
         href = link.get("href")
+        if not href or href.startswith("#"):
+            # no destination, or fragment, skip
+            continue
         new_url = urljoin(page_url, href)
         parsed = urlparse(new_url)
-        if parsed.hostname == base_domain and parsed.scheme in ("http", "https"):
-            internal_links.append(new_url)
+        if parsed.scheme in ("http", "https") and is_internal_link(new_url, base_domain):
+            internal_links.append(normalize_url(new_url))
 
     return {
         "title": title,
         "description": description,
         "h1": h1,
         "og_type": og_type,
-        "noindex": noindex,
+        "noindex": False,
         "canonical": canonical,
         "content_hash": content_hash(body_text),
         "internal_links": internal_links,
     }
 
 
-def _load_robots(base_url: str) -> RobotFileParser:
+async def _load_robots(
+    client: httpx.AsyncClient, base_url: str
+) -> tuple[RobotFileParser, list[str]]:
     """Fetch and parse robots.txt, returning a permissive parser on failure."""
     rp = RobotFileParser()
-    rp.set_url(f"{base_url}/robots.txt")
+    robots_url = f"{base_url}/robots.txt"
+    rp.set_url(robots_url)
+    sitemap_urls: list[str] = []
     try:
-        rp.read()
+        response = await client.get(robots_url, timeout=TIMEOUT, follow_redirects=True)
+        if response.is_success:
+            lines = response.text.splitlines()
+            rp.parse(lines) # parse for disallowed paths and user-agent restrictions
+            for line in lines:
+                # extract sitemap urls from robots.txt 
+                if line.lower().startswith("sitemap:"):
+                    sitemap_url = line.split(":", 1)[1].strip()
+                    if sitemap_url:
+                        sitemap_urls.append(sitemap_url)
+        else:
+            rp.allow_all = True
     except Exception:
-        rp.allow_all = True # No restrictions
-    return rp
+        rp.allow_all = True
+    return rp, sitemap_urls
 
 
-def crawl_site(start_url: str) -> list[Page]:
-    """
-    Crawl a site given a start_url to generate an llms.txt that reflects the entire website's structure.
+def _default_sitemap_candidates(base_url: str) -> list[str]:
+    return [
+        urljoin(base_url, "/sitemap.xml"),
+        urljoin(base_url, "/sitemap_index.xml"),
+    ]
 
-    Returns list of Page objects.
-    """
-    # Construct a valid base URL
-    parsed_start = urlparse(start_url)
-    base_domain = parsed_start.hostname
-    base_url = f"{parsed_start.scheme}://{base_domain}"
 
-    # Adhere to robots.txt
-    robots = _load_robots(base_url)
-    crawl_delay = robots.crawl_delay("*")
-    delay = crawl_delay if crawl_delay else REQUEST_DELAY
+def _sitemap_candidate_urls(base_url: str, robots_sitemaps: list[str]) -> list[str]:
+    """Build a deduped list of sitemap URLs to try, preferring robots.txt declarations."""
+    if robots_sitemaps:
+        seen: set[str] = set()
+        candidates: list[str] = []
+        for url in robots_sitemaps:
+            if url not in seen:
+                seen.add(url)
+                candidates.append(url)
+        return candidates
+    return _default_sitemap_candidates(base_url)
 
-    # Check if sitemap exists
-    sitemap_urls = get_sitemap_urls(base_url)
 
-    # Build the initial queue: (url, depth)
-    queue = deque([(base_url, 0)])
-
-    if sitemap_urls:
-        for url in sitemap_urls[:MAX_PAGES]:
-            queue.append((url, 0))
-
-    # Seed common doc paths so developer content isn't missed
-    # even if the homepage doesn't link to it directly
-    for path in COMMON_DOC_PATHS:
-        queue.append((f"{base_url}{path}", 1))
-
-    visited = set()
-    results = []
-
-    while queue and len(results) < MAX_PAGES:
-        url, depth = queue.popleft()
-
-        if depth > MAX_DEPTH:
+def _merge_sitemap_priorities(
+    accumulated: dict[str, float | None],
+    incoming: dict[str, float | None],
+) -> dict[str, float | None]:
+    """Merge two dicts of normalized URLs to optional priorities, prioritizing incoming values."""
+    merged = dict(accumulated)
+    for url, priority in incoming.items():
+        if url not in merged:
+            merged[url] = priority
             continue
-
-        normalized = normalize_url(url)
-        url_id = url_hash(normalized)
-
-        if url_id in visited:
+        existing = merged[url]
+        if priority is None:
             continue
-        visited.add(url_id)
+        if existing is None or priority > existing:
+            merged[url] = priority
+    return merged
 
-        if not robots.can_fetch("*", normalized):
+
+def _parse_sitemap_priorities(soup: BeautifulSoup) -> dict[str, float | None]:
+    """Given a BeautifulSoup object for a sitemap, return a dict of normalized URLs to their optional priorities."""
+    entries: dict[str, float | None] = {}
+
+    for url_tag in soup.find_all("url"):
+        loc = url_tag.find("loc")
+        if not loc or not loc.text.strip():
             continue
+        priority_tag = url_tag.find("priority")
+        priority: float | None = None
+        if priority_tag and priority_tag.text.strip():
+            try:
+                priority = float(priority_tag.text.strip())
+            except ValueError:
+                priority = None
+        page_url = normalize_url(loc.text.strip())
+        entries[page_url] = priority
 
+    if entries:
+        return entries
+
+    # fallback if sitemap is flat list of locations
+    for loc in soup.find_all("loc"):
+        if loc.text.strip():
+            entries[normalize_url(loc.text.strip())] = None
+
+    return entries
+
+
+async def _get_sitemap_priorities(
+    client: httpx.AsyncClient,
+    sitemap_url: str,
+    semaphore: asyncio.Semaphore,
+    visited: set[str] | None = None,
+) -> dict[str, float | None]:
+    """Fetch a sitemap and extract page URLs with optional priorities."""
+    if visited is None:
+        visited = set()
+
+    if sitemap_url in visited:
+        return {}
+    visited.add(sitemap_url)
+
+    try:
+        async with semaphore:
+            response = await client.get(sitemap_url, timeout=TIMEOUT, follow_redirects=True)
+        if not response.is_success:
+            logger.info("Sitemap fetch failed (%s): %s", response.status_code, sitemap_url)
+            return {}
+        soup = BeautifulSoup(response.text, "lxml-xml")
+
+        if soup.find("sitemapindex"):
+            # nested sitemaps: parse and fetch each sitemap url
+            nested_sitemaps = [loc.text.strip() for loc in soup.find_all("loc") if loc.text.strip()]
+            logger.info(
+                "Sitemap index at %s: following %d nested sitemaps",
+                sitemap_url,
+                len(nested_sitemaps),
+            )
+            # Recursively fetch each nested sitemap in parallel and merge the results
+            nested_results = await asyncio.gather(
+                *[
+                    _get_sitemap_priorities(client, url, semaphore, visited)
+                    for url in nested_sitemaps
+                ]
+            )
+            merged: dict[str, float | None] = {}
+            for batch_entries in nested_results:
+                merged = _merge_sitemap_priorities(merged, batch_entries)
+            logger.info("Sitemap index at %s: resolved to %d URLs", sitemap_url, len(merged))
+            return merged
+
+        # flat sitemap: parse and return URLs with optional priorities
+        entries = _parse_sitemap_priorities(soup)
+        logger.info("Sitemap at %s: parsed %d URLs", sitemap_url, len(entries))
+        return entries
+    except Exception:
+        logger.warning("Failed to fetch sitemap %s", sitemap_url, exc_info=True)
+        return {}
+
+
+async def _collect_sitemap_priorities(
+    client: httpx.AsyncClient,
+    candidate_urls: list[str],
+    semaphore: asyncio.Semaphore,
+) -> dict[str, float | None]:
+    """Fetch and merge entries from one or more sitemap URLs."""
+    merged: dict[str, float | None] = {}
+    for sitemap_url in candidate_urls:
+        entries = await _get_sitemap_priorities(client, sitemap_url, semaphore)
+        if entries:
+            merged = _merge_sitemap_priorities(merged, entries)
+            logger.info(
+                "Merged sitemap source %s (%d URLs); running total %d URLs",
+                sitemap_url,
+                len(entries),
+                len(merged),
+            )
+    return merged
+
+
+def _enrich_crawled_pages(
+    pages: list[Page],
+    inbound_counts: dict[str, int],
+    sitemap_priorities: dict[str, float | None],
+) -> None:
+    """Set inbound counts and sitemap flags on crawled pages."""
+    for page in pages:
+        key = normalize_url(page.url)
+        page.inbound_count = inbound_counts.get(key, 0)
+        if key in sitemap_priorities:
+            page.in_sitemap = True
+            page.sitemap_priority = sitemap_priorities[key]
+
+
+async def _fetch_page(
+    client: httpx.AsyncClient,
+    url: str,
+    depth: int,
+    base_domain: str,
+    robots: RobotFileParser,
+    semaphore: asyncio.Semaphore,
+) -> dict | None:
+    """Fetch and extract data for a single page given a normalized url."""
+    if not robots.can_fetch("*", url):
+        # break out early, page is not indexable
+        return None
+
+    async with semaphore:
         try:
-            response = requests.get(normalized, timeout=TIMEOUT)
-            if not response.ok:
-                continue
+            response = await client.get(url, timeout=TIMEOUT, follow_redirects=True)
+            if not response.is_success:
+                return None
+            final_parsed = urlparse(str(response.url))
+            if should_skip_url(final_parsed.path.lower(), final_parsed.query):
+                return None
+            if not _is_html_response(response):
+                return None
+            html = response.text
         except Exception:
-            continue
+            return None
 
-        # Extract data
-        page_data = extract_page_data(response.text, normalized, base_domain)
+    try:
+        page_data = _extract_page_data(html, url, base_domain)
+    except Exception:
+        logger.debug("Failed to parse HTML for %s", url, exc_info=True)
+        return None
+    if page_data["noindex"]:
+        return None
 
-        # Skip noindex pages 
-        if page_data["noindex"]:
-            continue
-
-        page_url = page_data["canonical"] or normalized
-
-        results.append(Page(
+    page_url = page_data["canonical"] or url
+    return {
+        "page": Page(
             url=page_url,
             title=page_data["title"],
             description=page_data["description"],
@@ -214,15 +394,271 @@ def crawl_site(start_url: str) -> list[Page]:
             og_type=page_data["og_type"],
             depth=depth,
             content_hash=page_data["content_hash"],
-        ))
+        ),
+        "internal_links": page_data["internal_links"],
+    }
 
-        # Add internal links to queue (only if we haven't hit max depth)
-        if depth < MAX_DEPTH:
-            for link in page_data["internal_links"]:
-                if url_hash(normalize_url(link)) not in visited:
-                    queue.append((link, depth + 1))
 
-        # Be polite
-        time.sleep(delay)
+def _add_crawl_candidate(
+    crawl_queue: dict[str, tuple[float, str, int]],
+    url: str,
+    depth: int,
+    sitemap_priorities: dict[str, float | None],
+    *,
+    score_boost: float = 0.0,
+    allow_excluded: bool = False,
+    base_domain: str,
+) -> None:
+    """Add or update a URL in the crawl queue with a score."""
+    if depth > MAX_DEPTH:
+        return
+    if not is_internal_link(url, base_domain):
+        return
+    if not allow_excluded and should_exclude_crawl_candidate(url):
+        return
 
-    return results
+    parsed = urlparse(url)
+    if should_skip_url(parsed.path.lower(), parsed.query):
+        return
+
+    key = normalize_url(url)
+    priority = sitemap_priorities.get(key)
+    score = precrawl_url_score(url, priority) + score_boost
+    existing = crawl_queue.get(key)
+    if existing is None or score > existing[0]:
+        crawl_queue[key] = (score, url, depth)
+
+
+def _store_crawled_page(
+    page: Page,
+    internal_links: list[str],
+    pages: list[Page],
+    page_index_by_url: dict[str, int],
+    inbound_counts: dict[str, int],
+) -> None:
+    """Add a page to the crawl list, or replace the existing entry if quality improved."""
+    for link in internal_links:
+        target = normalize_url(link)
+        inbound_counts[target] = inbound_counts.get(target, 0) + 1
+
+    page_key = normalize_url(page.url)
+    existing_idx = page_index_by_url.get(page_key)
+    if existing_idx is None:
+        page_index_by_url[page_key] = len(pages)
+        pages.append(page)
+    elif page_quality(page) > page_quality(pages[existing_idx]):
+        pages[existing_idx] = page
+
+
+def _sorted_crawl_queue(
+    crawl_queue: dict[str, tuple[float, str, int]],
+) -> list[tuple[float, str, int]]:
+    """Return crawl queue entries sorted by score, depth, then URL."""
+
+    def sort_key(entry: tuple[float, str, int]) -> tuple[float, int, str]:
+        score, url, depth = entry
+        return (-score, depth, url)
+
+    return sorted(crawl_queue.values(), key=sort_key)
+
+
+def _seed_crawl_queue(
+    crawl_queue: dict[str, tuple[float, str, int]],
+    base_url: str,
+    base_domain: str,
+    sitemap_priorities: dict[str, float | None],
+) -> None:
+    """Seed crawl queue with homepage, common doc paths, and top sitemap URLs."""
+    # first add homepage with highest priority
+    _add_crawl_candidate(
+        crawl_queue,
+        base_url,
+        0,
+        sitemap_priorities,
+        score_boost=HOMEPAGE_BOOST,
+        allow_excluded=True,
+        base_domain=base_domain,
+    )
+    # guesses commmon doc paths to queue them earlier --> faster prioritization
+    for path in COMMON_DOC_PATHS:
+        _add_crawl_candidate(
+            crawl_queue,
+            f"{base_url}{path}",
+            1,
+            sitemap_priorities,
+            score_boost=DOC_PATH_BOOST,
+            allow_excluded=True,
+            base_domain=base_domain,
+        )
+    # return top sitemap urls to crawl first
+    sitemap_seed_urls = prioritize_sitemap_urls(
+        sitemap_priorities,
+        base_domain,
+        is_internal=is_internal_link,
+        should_skip=should_skip_url,
+        limit=SITEMAP_SEED_LIMIT,
+    )
+    for url in sitemap_seed_urls:
+        _add_crawl_candidate(
+            crawl_queue,
+            url,
+            0,
+            sitemap_priorities,
+            base_domain=base_domain,
+        )
+
+
+async def _fetch_optional_pages(
+    client: httpx.AsyncClient,
+    base_url: str,
+    sitemap_priorities: dict[str, float | None],
+    base_domain: str,
+    robots: RobotFileParser,
+    semaphore: asyncio.Semaphore,
+    visited: set[str],
+    slots_remaining: int,
+) -> list[Page]:
+    """Fetch optional pages to fill remaining budget after main crawl."""
+    if slots_remaining <= 0:
+        return []
+
+    optional_urls = top_optional_sitemap_urls(
+        sitemap_priorities,
+        base_domain,
+        is_internal=is_internal_link,
+        should_skip=should_skip_url,
+        limit=TIER_2_CANDIDATES,
+    )
+    # fallback to common optional paths if no sitemap URLs found
+    if not optional_urls:
+        optional_urls = [urljoin(base_url, path) for path in COMMON_OPTIONAL_PATHS]
+
+    pages: list[Page] = []
+    for url in optional_urls:
+        if len(pages) >= slots_remaining:
+            break
+        key = normalize_url(url)
+        url_id = url_hash(key)
+        if url_id in visited:
+            continue
+        visited.add(url_id)
+        result = await _fetch_page(client, url, 0, base_domain, robots, semaphore)
+        if result is None:
+            continue
+        pages.append(result["page"])
+
+    logger.info(
+        "Optional crawl reserve: fetched %d pages (%d candidates)",
+        len(pages),
+        len(optional_urls),
+    )
+    return pages
+
+
+async def crawl_site(start_url: str) -> list[Page]:
+    """
+    Crawl a site given a start_url to generate an llms.txt that reflects the entire website's structure.
+
+    Returns list of Page objects.
+    """
+    parsed_start = urlparse(start_url)
+    base_domain = registrable_domain(parsed_start.hostname or "")
+    base_url = f"{parsed_start.scheme}://{parsed_start.hostname}"
+
+    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+    visited: set[str] = set() # store url hashes
+    pages: list[Page] = []
+    page_index_by_url: dict[str, int] = {} # normalized url -> index in resulting Page list
+
+    async with httpx.AsyncClient() as client:
+        robots, robots_sitemaps = await _load_robots(client, base_url)
+        sitemap_candidates = _sitemap_candidate_urls(base_url, robots_sitemaps)
+        if robots_sitemaps:
+            logger.info("robots.txt declared %d sitemap(s): %s", len(robots_sitemaps), robots_sitemaps)
+        sitemap_priorities = await _collect_sitemap_priorities(client, sitemap_candidates, semaphore)
+        logger.info("Sitemap found: %d URLs", len(sitemap_priorities))
+
+        crawl_queue: dict[str, tuple[float, str, int]] = {}
+        inbound_counts: dict[str, int] = {}
+
+        # initialize seed crawl queue with more important pages first from official sitemaps
+        _seed_crawl_queue(crawl_queue, base_url, base_domain, sitemap_priorities)
+
+        while crawl_queue and len(pages) < MAIN_CRAWL_BUDGET:
+            batch_candidates = _sorted_crawl_queue(crawl_queue)
+            batch: list[tuple[str, int]] = []
+            remaining = MAIN_CRAWL_BUDGET - len(pages)
+
+            for score, url, depth in batch_candidates:
+                if len(batch) >= min(remaining, MAX_CONCURRENCY):
+                    # return if we have reached the main crawl budget
+                    break
+                key = normalize_url(url)
+                url_id = url_hash(key)
+                if url_id in visited:
+                    # skip if already visited
+                    crawl_queue.pop(key, None)
+                    continue
+                visited.add(url_id)
+                crawl_queue.pop(key, None)
+                batch.append((url, depth))
+
+            if not batch:
+                break
+
+            fetch_results = await asyncio.gather(
+                *[
+                    _fetch_page(client, url, depth, base_domain, robots, semaphore)
+                    for url, depth in batch
+                ]
+            )
+
+            # bfs: process pages in order of depth, then add links to crawl queue
+            for result, (url, depth) in zip(fetch_results, batch):
+                if len(pages) >= MAIN_CRAWL_BUDGET:
+                    break
+                if result is None:
+                    continue
+
+                page = result["page"]
+                _store_crawled_page(
+                    page,
+                    result["internal_links"],
+                    pages,
+                    page_index_by_url,
+                    inbound_counts,
+                )
+
+                if depth < MAX_DEPTH:
+                    for link in result["internal_links"]:
+                        _add_crawl_candidate(
+                            crawl_queue,
+                            link,
+                            depth + 1,
+                            sitemap_priorities,
+                            base_domain=base_domain,
+                        )
+        # fetch optional sitemap pages to fill remaining budget after main crawl
+        optional_pages = await _fetch_optional_pages(
+            client,
+            base_url,
+            sitemap_priorities,
+            base_domain,
+            robots,
+            semaphore,
+            visited,
+            MAX_PAGES - len(pages),
+        )
+        for page in optional_pages:
+            _store_crawled_page(page, [], pages, page_index_by_url, inbound_counts)
+
+    # calculate each page's inbound count and priority 
+    _enrich_crawled_pages(pages, inbound_counts, sitemap_priorities)
+    in_sitemap_count = sum(1 for page in pages if page.in_sitemap)
+    logger.info(
+        "Pages after crawl: %d (max %d; %d matched sitemap entries)",
+        len(pages),
+        MAX_PAGES,
+        in_sitemap_count,
+    )
+    return pages

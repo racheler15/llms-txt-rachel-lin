@@ -59,7 +59,24 @@ CATEGORY_RULES: dict[Category, list[str]] = {
     ],
 }
 
-SKIP_PATTERNS = [
+HIGH_VALUE_SEGMENTS = {
+    "about", "faq", "faqs", "contact", "press", "blog",
+    "docs", "doc", "pricing", "careers", "jobs",
+    "payments", "billing", "checkout", "connect", "tax",
+    "products", "developers", "api", "platform", "solutions",
+}
+
+MAX_DEPTH = 3
+TIER_1_SIZE = 100
+TIER_2_CANDIDATES = 15
+SITEMAP_SEED_LIMIT = 150
+OPTIONAL_CAP = 8
+OPTIONAL_SECTION_NAME = "Optional"
+HOMEPAGE_BOOST = 1000
+DOC_PATH_BOOST = 500
+
+# Never crawl or include in llms.txt
+HARD_SKIP_PATTERNS = [
     "/login", "/signup", "/sign-up", "/sign-in", "/register",
     "/auth", "/oauth", "/sso",
     "/search", "/404", "/500",
@@ -67,25 +84,20 @@ SKIP_PATTERNS = [
     "/cdn-cgi/", "/assets/", "/static/",
     "/tag/", "/tags/", "/category/", "/categories/",
     "/page/",
-    "/terms", "/privacy", "/legal", "/policy",
-    "/tos", "/cookies", "/compliance",
     "/sitemap", "/robots.txt",
     "/rss", "/feed", "/atom",
     ".png", ".jpg", ".jpeg", ".gif", ".svg",
     ".pdf", ".zip", ".css", ".js",
 ]
 
-SECTION_ORDER = [
-    Category.GETTING_STARTED,
-    Category.API,
-    Category.DOCS,
-    Category.EXAMPLES,
-    Category.PRODUCTS,
-    Category.PRICING,
-    Category.INTEGRATIONS,
-    Category.CHANGELOG,
-    Category.FAQ,
-    Category.OPTIONAL,
+# Low-priority pages eligible for the spec ## Optional section (Tier 2)
+OPTIONAL_PATTERNS = [
+    "/terms", "/privacy", "/legal", "/policy",
+    "/tos", "/cookies", "/compliance",
+    "/press", "/newsroom", "/media",
+    "/careers", "/jobs", "/blog", "/posts", "/news",
+    "/articles", "/community", "/forum", "/contact",
+    "/about/team", "/partners", "/case-studies",
 ]
 
 COMMON_DOC_PATHS: list[str] = sorted(set(
@@ -93,3 +105,13 @@ COMMON_DOC_PATHS: list[str] = sorted(set(
     for c in (Category.GETTING_STARTED, Category.API, Category.DOCS)
     for path in CATEGORY_RULES[c]
 ))
+
+COMMON_OPTIONAL_PATHS: list[str] = [
+    "/privacy",
+    "/terms",
+    "/legal",
+    "/policy",
+    "/tos",
+    "/cookies",
+    "/compliance",
+]
