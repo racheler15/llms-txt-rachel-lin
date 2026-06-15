@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useGenerate } from '../../hooks/useGenerate'
+import { useGenerate } from '../../../hooks/useGenerate'
 import './GeneratorForm.css'
 
 function GeneratorForm() {
@@ -10,8 +10,16 @@ function GeneratorForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const llmsTxt = await mutateAsync(url)
-    navigate('/analysis', { state: { llmsTxt } })
+    const trimmedUrl = url.trim()
+    if (!trimmedUrl) {
+      return
+    }
+    try {
+      const result = await mutateAsync(trimmedUrl)
+      navigate('/analysis', { state: result })
+    } catch {
+      // Error message shown via isError / error from useGenerate
+    }
   }
 
   return (

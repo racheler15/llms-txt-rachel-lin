@@ -1,4 +1,6 @@
 import hashlib
+
+import tldextract
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from constants import HARD_SKIP_PATTERNS
@@ -6,13 +8,21 @@ from models import Page
 
 
 def registrable_domain(hostname: str) -> str:
-    """Return the registrable domain (e.g. stripe.com) from a hostname."""
+    """Return the registrable domain (e.g. stripe.com, example.co.uk) from a hostname."""
     host = hostname.lower().removeprefix("www.")
-    parts = host.split(".")
-    if len(parts) >= 2:
-        # Last two labels = registrable domain
-        return ".".join(parts[-2:])
+    if not host:
+        return ""
+
+    extracted = tldextract.extract(host)
+    if extracted.domain and extracted.suffix:
+        return f"{extracted.domain}.{extracted.suffix}"
     return host
+
+
+def display_domain(hostname: str) -> str:
+    """Return registrable domain, falling back to bare hostname."""
+    normalized = hostname.lower().removeprefix("www.")
+    return registrable_domain(hostname) or normalized
 
 
 def is_internal_link(url: str, base_domain: str) -> bool:

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -75,6 +76,16 @@ def _parse_json_object(text: str) -> dict:
     return parsed
 
 
+async def _create_claude_message(*, api_key: str, max_tokens: int, content: str):
+    client = anthropic.Anthropic(api_key=api_key)
+    return await asyncio.to_thread(
+        client.messages.create,
+        model=CLAUDE_MODEL,
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": content}],
+    )
+
+
 def _resolve_categorized_urls(
     raw: dict,
     lookup: dict[str, Page],
@@ -106,7 +117,7 @@ def _resolve_categorized_urls(
     return grouped
 
 
-def _categorize_with_claude(
+async def _categorize_with_claude(
     pages: list[Page],
     tier_1: list[Page],
 ) -> dict[str, list[Page]] | None:
@@ -137,11 +148,10 @@ def _categorize_with_claude(
     )
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
+        response = await _create_claude_message(
+            api_key=api_key,
             max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
+            content=prompt,
         )
         raw = _parse_json_object(response.content[0].text)
         grouped = _resolve_categorized_urls(raw, _page_lookup(pages))
@@ -161,7 +171,7 @@ def _categorize_fallback(tier_1: list[Page]) -> dict[str, list[Page]]:
     return {"Main": tier_1[:MAX_PAGES_TO_SELECT]}
 
 
-def categorize_pages(pages: list[Page]) -> dict[str, list[Page]]:
+async def categorize_pages(pages: list[Page]) -> dict[str, list[Page]]:
     """
     Rank pages, categorize Tier 1 via Claude, and append a spec Optional section from Tier 2.
     """
@@ -175,7 +185,9 @@ def categorize_pages(pages: list[Page]) -> dict[str, list[Page]]:
         len(tier_2_pool),
     )
 
-    main_sections = _categorize_with_claude(pages, tier_1) or _categorize_fallback(tier_1)
+    main_sections = (
+        await _categorize_with_claude(pages, tier_1) or _categorize_fallback(tier_1)
+    )
 
     used_urls = {
         normalize_url(page.url)
@@ -193,25 +205,21 @@ def categorize_pages(pages: list[Page]) -> dict[str, list[Page]]:
     return result
 
 
-def _generate_site_description(title: str, url: str) -> str:
+async def _generate_site_description(title: str, url: str) -> str:
     """Use Claude to generate a one-sentence site description when none exists."""
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         return ""
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
+        response = await _create_claude_message(
+            api_key=api_key,
             max_tokens=100,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Write a single concise sentence describing what this website/product is. "
-                    f"No quotes, no prefix, just the description.\n\n"
-                    f"Title: {title}\n"
-                    f"URL: {url}"
-                ),
-            }],
+            content=(
+                f"Write a single concise sentence describing what this website/product is. "
+                f"No quotes, no prefix, just the description.\n\n"
+                f"Title: {title}\n"
+                f"URL: {url}"
+            ),
         )
         return response.content[0].text.strip()
     except Exception:
@@ -228,18 +236,18 @@ def _section_limit(section_name: str) -> int:
     return MAX_LINKS_PER_SECTION
 
 
-def generate_llms_txt(
+async def generate_llms_txt(
     pages: list[Page],
     categorized: dict[str, list[Page]],
-) -> str:
-    """Assemble a spec-compliant llms.txt markdown string."""
+) -> tuple[str, int]:
+    """Assemble a spec-compliant llms.txt markdown string and return included page count."""
     homepage = _get_homepage(pages)
     site_title = homepage.title if homepage else urlparse(pages[0].url).hostname
 
     if homepage and homepage.description:
         site_description = homepage.description
     elif homepage:
-        site_description = _generate_site_description(homepage.title, homepage.url)
+        site_description = await _generate_site_description(homepage.title, homepage.url)
     else:
         site_description = ""
 
@@ -302,4 +310,4 @@ def generate_llms_txt(
     if optional_pages:
         append_section(OPTIONAL_SECTION_NAME, optional_pages)
 
-    return "\n".join(lines).rstrip() + "\n"
+    return "\n".join(lines).rstrip() + "\n", total_links

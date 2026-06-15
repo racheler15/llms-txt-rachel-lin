@@ -1,0 +1,73 @@
+.analysis-overview-container {
+  margin-bottom: 2rem;
+}
+
+.analysis-overview-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: none;
+  color: #444;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: 1.25rem;
+}
+
+.analysis-overview-back:hover {
+  color: #111;
+}
+
+.analysis-overview-header {
+  margin-bottom: 1.5rem;
+}
+
+.analysis-overview-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.75rem 1rem;
+  width: 100%;
+}
+
+.analysis-overview-site-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1 1 auto;
+  min-width: calc(100% - 12rem);
+  max-width: 100%;
+}
+
+.analysis-overview-domain {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: #111;
+}
+
+.analysis-overview-meta {
+  font-size: 0.95rem;
+  color: #6b6b6b;
+  white-space: nowrap;
+}
+
+.analysis-overview-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  background: #fbf8f0;
+  border: 1px solid #d4d0c8;
+  border-radius: 8px;
+  color: #444;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0.5rem 0.9rem;
+  white-space: nowrap;
+}
+
+.analysis-overview-refresh:hover {
+  color: #111;
+  border-color: #bbb;
+}

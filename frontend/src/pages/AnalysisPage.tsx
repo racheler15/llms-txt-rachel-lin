@@ -1,17 +1,7 @@
-import { useLocation, useNavigate } from 'react-router-dom'
-import GeneratedOutput from '../components/generated-output/GeneratedOutput'
+import Analysis from '../components/analysis/Analysis'
 
 function AnalysisPage() {
-  const location = useLocation()
-  const navigate = useNavigate()
-  const { llmsTxt } = (location.state as { llmsTxt: string }) || {}
-
-  if (!llmsTxt) {
-    navigate('/')
-    return null
-  }
-
-  return <GeneratedOutput llmsTxt={llmsTxt} />
+  return <Analysis />
 }
 
 export default AnalysisPage

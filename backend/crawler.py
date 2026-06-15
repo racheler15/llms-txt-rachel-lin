@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 from urllib.robotparser import RobotFileParser
 
@@ -33,6 +34,30 @@ from url_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class HomepageSignals:
+    has_json_ld: bool
+    has_og_title: bool
+    has_og_description: bool
+
+
+@dataclass
+class CrawlFetchStats:
+    http_errors: int = 0
+
+
+@dataclass
+class CrawlResult:
+    pages: list[Page]
+    base_url: str
+    sitemap_exists: bool
+    robots_text: str | None
+    robots_status: int | None
+    homepage_signals: HomepageSignals | None
+    llms_txt_exists: bool
+    http_errors: int = 0
 
 
 MAX_PAGES = 200
@@ -124,6 +149,14 @@ def _build_description(soup: BeautifulSoup, h1: str) -> str:
     return ""
 
 
+def _extract_homepage_signals(soup: BeautifulSoup) -> HomepageSignals:
+    return HomepageSignals(
+        has_json_ld=soup.find("script", attrs={"type": "application/ld+json"}) is not None,
+        has_og_title=bool(_meta_content(soup, og_property="og:title")),
+        has_og_description=bool(_meta_content(soup, og_property="og:description")),
+    )
+
+
 def _extract_page_data(html: str, page_url: str, base_domain: str) -> dict:
     """Extract title, description, headings, and internal links from HTML."""
     soup = BeautifulSoup(html, "lxml")
@@ -143,9 +176,11 @@ def _extract_page_data(html: str, page_url: str, base_domain: str) -> dict:
 
     title = _build_title(soup)
     description = _build_description(soup, h1)
+    meta_description = _meta_content(soup, name="description")
 
     body = soup.find("body")
     body_text = body.get_text(separator=" ", strip=True) if body else ""
+    word_count = len(body_text.split()) if body_text else 0
 
     internal_links = []
     for link in soup.find_all("a", href=True):
@@ -166,21 +201,28 @@ def _extract_page_data(html: str, page_url: str, base_domain: str) -> dict:
         "noindex": False,
         "canonical": canonical,
         "content_hash": content_hash(body_text),
+        "meta_description": meta_description,
+        "word_count": word_count,
+        "homepage_signals": _extract_homepage_signals(soup),
         "internal_links": internal_links,
     }
 
 
 async def _load_robots(
     client: httpx.AsyncClient, base_url: str
-) -> tuple[RobotFileParser, list[str]]:
+) -> tuple[RobotFileParser, list[str], str | None, int | None]:
     """Fetch and parse robots.txt, returning a permissive parser on failure."""
     rp = RobotFileParser()
     robots_url = f"{base_url}/robots.txt"
     rp.set_url(robots_url)
     sitemap_urls: list[str] = []
+    robots_text: str | None = None
+    robots_status: int | None = None
     try:
         response = await client.get(robots_url, timeout=TIMEOUT, follow_redirects=True)
+        robots_status = response.status_code
         if response.is_success:
+            robots_text = response.text
             lines = response.text.splitlines()
             rp.parse(lines) # parse for disallowed paths and user-agent restrictions
             for line in lines:
@@ -193,7 +235,19 @@ async def _load_robots(
             rp.allow_all = True
     except Exception:
         rp.allow_all = True
-    return rp, sitemap_urls
+    return rp, sitemap_urls, robots_text, robots_status
+
+
+async def _check_llms_txt(client: httpx.AsyncClient, base_url: str) -> bool:
+    try:
+        response = await client.get(
+            urljoin(base_url, "/llms.txt"),
+            timeout=TIMEOUT,
+            follow_redirects=True,
+        )
+        return response.status_code == 200
+    except Exception:
+        return False
 
 
 def _default_sitemap_candidates(base_url: str) -> list[str]:
@@ -268,13 +322,13 @@ async def _get_sitemap_priorities(
     sitemap_url: str,
     semaphore: asyncio.Semaphore,
     visited: set[str] | None = None,
-) -> dict[str, float | None]:
+) -> tuple[dict[str, float | None], bool]:
     """Fetch a sitemap and extract page URLs with optional priorities."""
     if visited is None:
         visited = set()
 
     if sitemap_url in visited:
-        return {}
+        return {}, False
     visited.add(sitemap_url)
 
     try:
@@ -282,7 +336,7 @@ async def _get_sitemap_priorities(
             response = await client.get(sitemap_url, timeout=TIMEOUT, follow_redirects=True)
         if not response.is_success:
             logger.info("Sitemap fetch failed (%s): %s", response.status_code, sitemap_url)
-            return {}
+            return {}, False
         soup = BeautifulSoup(response.text, "lxml-xml")
 
         if soup.find("sitemapindex"):
@@ -301,29 +355,32 @@ async def _get_sitemap_priorities(
                 ]
             )
             merged: dict[str, float | None] = {}
-            for batch_entries in nested_results:
+            for batch_entries, _ in nested_results:
                 merged = _merge_sitemap_priorities(merged, batch_entries)
             logger.info("Sitemap index at %s: resolved to %d URLs", sitemap_url, len(merged))
-            return merged
+            return merged, True
 
         # flat sitemap: parse and return URLs with optional priorities
         entries = _parse_sitemap_priorities(soup)
         logger.info("Sitemap at %s: parsed %d URLs", sitemap_url, len(entries))
-        return entries
+        return entries, True
     except Exception:
         logger.warning("Failed to fetch sitemap %s", sitemap_url, exc_info=True)
-        return {}
+        return {}, False
 
 
 async def _collect_sitemap_priorities(
     client: httpx.AsyncClient,
     candidate_urls: list[str],
     semaphore: asyncio.Semaphore,
-) -> dict[str, float | None]:
+) -> tuple[dict[str, float | None], bool]:
     """Fetch and merge entries from one or more sitemap URLs."""
     merged: dict[str, float | None] = {}
+    sitemap_exists = False
     for sitemap_url in candidate_urls:
-        entries = await _get_sitemap_priorities(client, sitemap_url, semaphore)
+        entries, found = await _get_sitemap_priorities(client, sitemap_url, semaphore)
+        if found:
+            sitemap_exists = True
         if entries:
             merged = _merge_sitemap_priorities(merged, entries)
             logger.info(
@@ -332,7 +389,7 @@ async def _collect_sitemap_priorities(
                 len(entries),
                 len(merged),
             )
-    return merged
+    return merged, sitemap_exists
 
 
 def _enrich_crawled_pages(
@@ -356,6 +413,7 @@ async def _fetch_page(
     base_domain: str,
     robots: RobotFileParser,
     semaphore: asyncio.Semaphore,
+    fetch_stats: CrawlFetchStats | None = None,
 ) -> dict | None:
     """Fetch and extract data for a single page given a normalized url."""
     if not robots.can_fetch("*", url):
@@ -366,6 +424,8 @@ async def _fetch_page(
         try:
             response = await client.get(url, timeout=TIMEOUT, follow_redirects=True)
             if not response.is_success:
+                if fetch_stats is not None:
+                    fetch_stats.http_errors += 1
                 return None
             final_parsed = urlparse(str(response.url))
             if should_skip_url(final_parsed.path.lower(), final_parsed.query):
@@ -385,7 +445,7 @@ async def _fetch_page(
         return None
 
     page_url = page_data["canonical"] or url
-    return {
+    result: dict = {
         "page": Page(
             url=page_url,
             title=page_data["title"],
@@ -394,9 +454,14 @@ async def _fetch_page(
             og_type=page_data["og_type"],
             depth=depth,
             content_hash=page_data["content_hash"],
+            meta_description=page_data["meta_description"],
+            word_count=page_data["word_count"],
         ),
         "internal_links": page_data["internal_links"],
     }
+    if depth == 0:
+        result["homepage_signals"] = page_data["homepage_signals"]
+    return result
 
 
 def _add_crawl_candidate(
@@ -508,20 +573,12 @@ def _seed_crawl_queue(
         )
 
 
-async def _fetch_optional_pages(
-    client: httpx.AsyncClient,
+def _optional_reserve_urls(
     base_url: str,
     sitemap_priorities: dict[str, float | None],
     base_domain: str,
-    robots: RobotFileParser,
-    semaphore: asyncio.Semaphore,
-    visited: set[str],
-    slots_remaining: int,
-) -> list[Page]:
-    """Fetch optional pages to fill remaining budget after main crawl."""
-    if slots_remaining <= 0:
-        return []
-
+) -> list[str]:
+    """Return optional-pattern URLs to fetch in the post-main crawl reserve."""
     optional_urls = top_optional_sitemap_urls(
         sitemap_priorities,
         base_domain,
@@ -529,23 +586,65 @@ async def _fetch_optional_pages(
         should_skip=should_skip_url,
         limit=TIER_2_CANDIDATES,
     )
-    # fallback to common optional paths if no sitemap URLs found
-    if not optional_urls:
-        optional_urls = [urljoin(base_url, path) for path in COMMON_OPTIONAL_PATHS]
+    if optional_urls:
+        return optional_urls
+    return [urljoin(base_url, path) for path in COMMON_OPTIONAL_PATHS]
 
-    pages: list[Page] = []
+
+async def _fetch_optional_pages(
+    *,
+    client: httpx.AsyncClient,
+    base_url: str,
+    base_domain: str,
+    sitemap_priorities: dict[str, float | None],
+    robots: RobotFileParser,
+    semaphore: asyncio.Semaphore,
+    visited: set[str],
+    slots_remaining: int,
+    fetch_stats: CrawlFetchStats | None = None,
+) -> list[Page]:
+    """Fetch optional pages to fill remaining budget after main crawl."""
+    if slots_remaining <= 0:
+        return []
+
+    optional_urls = _optional_reserve_urls(base_url, sitemap_priorities, base_domain)
+
+    batch: list[str] = []
     for url in optional_urls:
-        if len(pages) >= slots_remaining:
+        if len(batch) >= slots_remaining:
             break
         key = normalize_url(url)
         url_id = url_hash(key)
         if url_id in visited:
             continue
         visited.add(url_id)
-        result = await _fetch_page(client, url, 0, base_domain, robots, semaphore)
+        batch.append(url)
+
+    if not batch:
+        return []
+
+    fetch_results = await asyncio.gather(
+        *[
+            _fetch_page(
+                client,
+                url,
+                0,
+                base_domain,
+                robots,
+                semaphore,
+                fetch_stats,
+            )
+            for url in batch
+        ]
+    )
+
+    pages: list[Page] = []
+    for result in fetch_results:
         if result is None:
             continue
         pages.append(result["page"])
+        if len(pages) >= slots_remaining:
+            break
 
     logger.info(
         "Optional crawl reserve: fetched %d pages (%d candidates)",
@@ -555,11 +654,14 @@ async def _fetch_optional_pages(
     return pages
 
 
-async def crawl_site(start_url: str) -> list[Page]:
+async def crawl_site(
+    start_url: str,
+    client: httpx.AsyncClient | None = None,
+) -> CrawlResult:
     """
     Crawl a site given a start_url to generate an llms.txt that reflects the entire website's structure.
 
-    Returns list of Page objects.
+    Returns CrawlResult with pages and crawl metadata.
     """
     parsed_start = urlparse(start_url)
     base_domain = registrable_domain(parsed_start.hostname or "")
@@ -569,13 +671,21 @@ async def crawl_site(start_url: str) -> list[Page]:
     visited: set[str] = set() # store url hashes
     pages: list[Page] = []
     page_index_by_url: dict[str, int] = {} # normalized url -> index in resulting Page list
+    sitemap_exists = False
 
-    async with httpx.AsyncClient() as client:
-        robots, robots_sitemaps = await _load_robots(client, base_url)
+    async def _run_crawl(active_client: httpx.AsyncClient) -> CrawlResult:
+        nonlocal sitemap_exists
+        homepage_signals: HomepageSignals | None = None
+        fetch_stats = CrawlFetchStats()
+        robots, robots_sitemaps, robots_text, robots_status = await _load_robots(
+            active_client, base_url
+        )
         sitemap_candidates = _sitemap_candidate_urls(base_url, robots_sitemaps)
         if robots_sitemaps:
             logger.info("robots.txt declared %d sitemap(s): %s", len(robots_sitemaps), robots_sitemaps)
-        sitemap_priorities = await _collect_sitemap_priorities(client, sitemap_candidates, semaphore)
+        sitemap_priorities, sitemap_exists = await _collect_sitemap_priorities(
+            active_client, sitemap_candidates, semaphore
+        )
         logger.info("Sitemap found: %d URLs", len(sitemap_priorities))
 
         crawl_queue: dict[str, tuple[float, str, int]] = {}
@@ -608,7 +718,15 @@ async def crawl_site(start_url: str) -> list[Page]:
 
             fetch_results = await asyncio.gather(
                 *[
-                    _fetch_page(client, url, depth, base_domain, robots, semaphore)
+                    _fetch_page(
+                        active_client,
+                        url,
+                        depth,
+                        base_domain,
+                        robots,
+                        semaphore,
+                        fetch_stats,
+                    )
                     for url, depth in batch
                 ]
             )
@@ -619,6 +737,9 @@ async def crawl_site(start_url: str) -> list[Page]:
                     break
                 if result is None:
                     continue
+
+                if depth == 0 and result.get("homepage_signals"):
+                    homepage_signals = result["homepage_signals"]
 
                 page = result["page"]
                 _store_crawled_page(
@@ -640,25 +761,42 @@ async def crawl_site(start_url: str) -> list[Page]:
                         )
         # fetch optional sitemap pages to fill remaining budget after main crawl
         optional_pages = await _fetch_optional_pages(
-            client,
-            base_url,
-            sitemap_priorities,
-            base_domain,
-            robots,
-            semaphore,
-            visited,
-            MAX_PAGES - len(pages),
+            client=active_client,
+            base_url=base_url,
+            base_domain=base_domain,
+            sitemap_priorities=sitemap_priorities,
+            robots=robots,
+            semaphore=semaphore,
+            visited=visited,
+            slots_remaining=MAX_PAGES - len(pages),
+            fetch_stats=fetch_stats,
         )
         for page in optional_pages:
             _store_crawled_page(page, [], pages, page_index_by_url, inbound_counts)
 
-    # calculate each page's inbound count and priority 
-    _enrich_crawled_pages(pages, inbound_counts, sitemap_priorities)
-    in_sitemap_count = sum(1 for page in pages if page.in_sitemap)
-    logger.info(
-        "Pages after crawl: %d (max %d; %d matched sitemap entries)",
-        len(pages),
-        MAX_PAGES,
-        in_sitemap_count,
-    )
-    return pages
+        llms_txt_exists = await _check_llms_txt(active_client, base_url)
+
+        _enrich_crawled_pages(pages, inbound_counts, sitemap_priorities)
+        in_sitemap_count = sum(1 for page in pages if page.in_sitemap)
+        logger.info(
+            "Pages after crawl: %d (max %d; %d matched sitemap entries)",
+            len(pages),
+            MAX_PAGES,
+            in_sitemap_count,
+        )
+        return CrawlResult(
+            pages=pages,
+            base_url=base_url,
+            sitemap_exists=sitemap_exists,
+            robots_text=robots_text,
+            robots_status=robots_status,
+            homepage_signals=homepage_signals,
+            llms_txt_exists=llms_txt_exists,
+            http_errors=fetch_stats.http_errors,
+        )
+
+    if client is not None:
+        return await _run_crawl(client)
+
+    async with httpx.AsyncClient() as owned_client:
+        return await _run_crawl(owned_client)

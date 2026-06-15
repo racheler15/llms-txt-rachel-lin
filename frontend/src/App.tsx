@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import Navbar from './components/navbar/Navbar'
-import HomePage from './pages/HomePage'
+import HomePage from './pages/Homepage'
 import AnalysisPage from './pages/AnalysisPage'
 
 const queryClient = new QueryClient()

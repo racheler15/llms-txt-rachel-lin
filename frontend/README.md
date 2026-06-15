@@ -22,7 +22,7 @@ React UI for generating spec-compliant [llms.txt](https://llmstxt.org) files fro
 src/
 ├── App.tsx              # Router + layout (navbar)
 ├── pages/
-│   ├── HomePage.tsx
+│   ├── Homepage.tsx
 │   └── AnalysisPage.tsx
 ├── components/
 │   ├── navbar/

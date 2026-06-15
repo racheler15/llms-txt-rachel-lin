@@ -1,6 +1,4 @@
-import { useNavigate } from 'react-router-dom'
-import { ArrowLeft } from '@carbon/icons-react'
-import { useDownload } from '../../hooks/useDownload'
+import { useDownload } from '../../../hooks/useDownload'
 import './GeneratedOutput.css'
 
 interface GeneratedOutputProps {
@@ -8,7 +6,6 @@ interface GeneratedOutputProps {
 }
 
 function GeneratedOutput({ llmsTxt }: GeneratedOutputProps) {
-  const navigate = useNavigate()
   const handleDownload = useDownload(llmsTxt, 'llms.txt')
 
   function handleCopy() {
@@ -17,9 +14,6 @@ function GeneratedOutput({ llmsTxt }: GeneratedOutputProps) {
 
   return (
     <section className="generated-output-container">
-      <button className="generated-output-back" onClick={() => navigate('/')}>
-        <ArrowLeft /> Back to home
-      </button>
       <div className="generated-output-code">
         <div className="generated-output-code-header">
           <span>llms.txt</span>

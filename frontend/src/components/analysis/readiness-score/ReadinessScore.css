@@ -1,0 +1,92 @@
+.readiness-score-card {
+  margin-bottom: 2rem;
+  padding: 1.5rem;
+  border: 1px solid #d4d0c8;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.readiness-score-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #111;
+  margin-bottom: 1.25rem;
+}
+
+.readiness-score-dimensions {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.readiness-dimension-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.readiness-dimension-label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #111;
+}
+
+.readiness-dimension-score {
+  font-size: 0.85rem;
+  color: #6b6b6b;
+  white-space: nowrap;
+}
+
+.readiness-dimension-bar-track {
+  height: 6px;
+  background: #ece8df;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.readiness-dimension-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.readiness-dimension-bar-fill--green {
+  background: #1a7f4b;
+}
+
+.readiness-dimension-bar-fill--amber {
+  background: #c9a227;
+}
+
+.readiness-dimension-bar-fill--red {
+  background: #c0392b;
+}
+
+.readiness-recommendations {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #ece8df;
+}
+
+.readiness-recommendations-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #111;
+  margin-bottom: 0.75rem;
+}
+
+.readiness-recommendations-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.readiness-recommendations-list li {
+  font-size: 0.9rem;
+  color: #444;
+  line-height: 1.45;
+}

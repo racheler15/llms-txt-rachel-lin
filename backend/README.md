@@ -74,7 +74,18 @@ Crawl a website and return a generated llms.txt file. Used by the frontend.
 
 ```json
 {
-  "llms_txt": "# Example\n\n> An example website.\n\n..."
+  "llms_txt": "# Example\n\n> An example website.\n\n...",
+  "domain": "example.com",
+  "pages_crawled": 42,
+  "pages_included": 29,
+  "readiness": {
+    "total": 74,
+    "max_total": 100,
+    "categories": [
+      { "id": "ai_bot_access", "label": "AI bot access", "score": 20, "max_score": 25 }
+    ],
+    "recommendations": ["Unblock GPTBot in robots.txt to allow ChatGPT to crawl your site"]
+  }
 }
 ```
 
@@ -85,50 +96,15 @@ Crawl a website and return a generated llms.txt file. Used by the frontend.
 | 422 | Invalid URL (request body fails `HttpUrl` validation) |
 | 404 | No pages could be crawled from this site. |
 
-### `POST /crawl`
-
-Crawl a website and return extracted page metadata.
-
-**Request body:**
-
-```json
-{
-  "url": "https://example.com"
-}
-```
-
-**Response:** array of `Page` objects:
-
-```json
-[
-  {
-    "url": "https://example.com",
-    "title": "Example Domain",
-    "description": "An example website.",
-    "h1": "Example Domain",
-    "og_type": "website",
-    "depth": 0,
-    "content_hash": "a1b2c3...",
-    "in_sitemap": true,
-    "sitemap_priority": 1.0,
-    "inbound_count": 12
-  }
-]
-```
-
-**Errors:**
-
-| Status | Detail |
-|--------|--------|
-| 422 | Invalid URL (request body fails `HttpUrl` validation) |
-
 ## Project layout
 
 ```
 backend/
 ├── main.py        # FastAPI routes
 ├── models.py      # Pydantic request/response models
+├── scan.py        # Crawl + readiness orchestration (run_scan)
 ├── crawler.py     # Async site crawler (httpx)
+├── readiness.py   # AI readiness scoring from crawl artifacts
 ├── generator.py   # Claude categorization + llms.txt assembly
 ├── scoring.py     # Page importance ranking and tier selection
 ├── url_utils.py   # URL normalization, dedup, skip filters
