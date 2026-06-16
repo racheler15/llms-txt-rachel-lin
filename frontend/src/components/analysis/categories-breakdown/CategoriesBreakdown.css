@@ -1,0 +1,101 @@
+.categories-breakdown-card {
+  margin-bottom: 2rem;
+  padding: 1.5rem;
+  border: 1px solid #d4d0c8;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.categories-breakdown-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #111;
+  margin-bottom: 1.25rem;
+}
+
+.categories-breakdown-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.categories-breakdown-group + .categories-breakdown-group {
+  border-top: 1px solid #ece8df;
+}
+
+.categories-breakdown-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.85rem 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+.categories-breakdown-toggle:hover .categories-breakdown-name {
+  color: #3b5bdb;
+}
+
+.categories-breakdown-toggle-main {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.categories-breakdown-chevron {
+  flex-shrink: 0;
+  color: #6b6b6b;
+  transition: transform 0.2s ease;
+}
+
+.categories-breakdown-chevron--open {
+  transform: rotate(180deg);
+}
+
+.categories-breakdown-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #111;
+}
+
+.categories-breakdown-count {
+  font-size: 0.8rem;
+  color: #6b6b6b;
+  white-space: nowrap;
+}
+
+.categories-breakdown-links {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0 0 0.85rem 1.35rem;
+}
+
+.categories-breakdown-links li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.categories-breakdown-links a {
+  font-size: 0.88rem;
+  color: #3b5bdb;
+  text-decoration: none;
+  width: fit-content;
+}
+
+.categories-breakdown-links a:hover {
+  text-decoration: underline;
+}
+
+.categories-breakdown-description {
+  font-size: 0.8rem;
+  color: #6b6b6b;
+  line-height: 1.4;
+}

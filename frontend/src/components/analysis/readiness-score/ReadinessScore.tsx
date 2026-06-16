@@ -1,4 +1,4 @@
-import type { ReadinessResult } from '../../../hooks/useGenerate'
+import type { ReadinessResult } from '../../../types/analysis'
 import './ReadinessScore.css'
 
 interface ReadinessScoreProps {

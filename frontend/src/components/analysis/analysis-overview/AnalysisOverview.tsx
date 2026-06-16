@@ -10,7 +10,8 @@ interface AnalysisOverviewProps {
   categoryCount: number
   aiReadiness?: number
   scannedLabel?: string
-  onCheckUpdates?: () => void
+  isRescanning?: boolean
+  onRescan?: () => void
 }
 
 function formatStat(value: number | undefined): string {
@@ -24,7 +25,8 @@ function AnalysisOverview({
   categoryCount,
   aiReadiness,
   scannedLabel = 'scanned just now',
-  onCheckUpdates,
+  isRescanning = false,
+  onRescan,
 }: AnalysisOverviewProps) {
   const navigate = useNavigate()
 
@@ -45,15 +47,22 @@ function AnalysisOverview({
       <div className="analysis-overview-header">
         <div className="analysis-overview-title-row">
           <div className="analysis-overview-site-info">
-            <h1 className="analysis-overview-domain">{domain}</h1>
+            <div className="analysis-overview-domain-row">
+              <h1 className="analysis-overview-domain">{domain}</h1>
+            </div>
             <p className="analysis-overview-meta">
               {pagesCrawled != null ? `${pagesCrawled} pages · ` : ''}
               {scannedLabel}
             </p>
           </div>
-          <button className="analysis-overview-refresh" onClick={onCheckUpdates} type="button">
+          <button
+            className="analysis-overview-refresh"
+            onClick={onRescan}
+            type="button"
+            disabled={!onRescan || isRescanning}
+          >
             <Renew size={16} />
-            Check for updates
+            {isRescanning ? 'Rescanning...' : 'Rescan'}
           </button>
         </div>
       </div>

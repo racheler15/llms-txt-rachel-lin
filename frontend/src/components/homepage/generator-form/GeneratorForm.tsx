@@ -1,11 +1,16 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { useGenerate } from '../../../hooks/useGenerate'
+import { recentScansQueryKey } from '../../../hooks/useRecentScans'
+import { useSeedScanCache } from '../../../hooks/useScan'
 import './GeneratorForm.css'
 
 function GeneratorForm() {
   const [url, setUrl] = useState('')
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const seedScanCache = useSeedScanCache()
   const { mutateAsync, isPending, isError, error } = useGenerate()
 
   async function handleSubmit(e: React.FormEvent) {
@@ -16,7 +21,9 @@ function GeneratorForm() {
     }
     try {
       const result = await mutateAsync(trimmedUrl)
-      navigate('/analysis', { state: result })
+      seedScanCache(result)
+      queryClient.invalidateQueries({ queryKey: recentScansQueryKey })
+      navigate(`/analysis/${result.domain}`)
     } catch {
       // Error message shown via isError / error from useGenerate
     }

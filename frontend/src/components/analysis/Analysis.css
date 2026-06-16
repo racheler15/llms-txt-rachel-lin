@@ -1,0 +1,24 @@
+.analysis-loading,
+.analysis-error,
+.analysis-missing-output {
+  margin: 2rem 0;
+  color: #444;
+}
+
+.analysis-error button,
+.analysis-missing-output button {
+  margin-top: 0.75rem;
+  background: #fbf8f0;
+  border: 1px solid #d4d0c8;
+  border-radius: 8px;
+  color: #444;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0.5rem 0.9rem;
+}
+
+.analysis-error button:hover,
+.analysis-missing-output button:hover {
+  color: #111;
+  border-color: #bbb;
+}

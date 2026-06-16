@@ -40,10 +40,36 @@
   max-width: 100%;
 }
 
+.analysis-overview-domain-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
 .analysis-overview-domain {
   font-size: 1.75rem;
   font-weight: 600;
   color: #111;
+}
+
+.analysis-overview-updated-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: #fff4e5;
+  border: 1px solid #f0c987;
+  color: #9a5b00;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.analysis-overview-refresh:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .analysis-overview-meta {

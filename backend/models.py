@@ -40,3 +40,43 @@ class GenerateResponse(BaseModel):
     pages_crawled: int
     pages_included: int
     readiness: ReadinessResponse
+    has_content_changes: bool = False
+    has_unviewed_changes: bool = False
+
+
+class ScanResponse(BaseModel):
+    domain: str
+    url: str
+    llms_txt: str | None = None
+    pages_crawled: int
+    pages_included: int
+    readiness: ReadinessResponse
+    has_content_changes: bool = False
+    has_unviewed_changes: bool = False
+    last_scanned_at: str
+
+
+class RecrawlResponse(BaseModel):
+    domain: str
+    url: str
+    pages_crawled: int
+    pages_included: int
+    readiness: ReadinessResponse
+    has_content_changes: bool = False
+    has_unviewed_changes: bool = False
+    last_scanned_at: str
+    llms_txt: str | None = None
+    content_changed: bool = False
+    regenerated: bool = False
+
+
+class ScanSummaryResponse(BaseModel):
+    domain: str
+    url: str
+    pages_crawled: int
+    pages_included: int
+    readiness_total: int
+    has_content_changes: bool = False
+    has_unviewed_changes: bool = False
+    last_scanned_at: str
+    generated: bool = False

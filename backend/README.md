@@ -53,10 +53,88 @@ API runs at `http://localhost:8000`.
 | Variable | Description |
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | API key for page categorization and site description generation |
+| `SCAN_DB_PATH` | Optional path to SQLite DB (default: `backend/data/scans.db`) |
+| `SCAN_SCHEDULER_ENABLED` | Enable background rescan loop (default: `true`) |
+| `SCAN_INTERVAL_HOURS` | Re-scan a domain after this many hours since `last_scanned_at` (default: `24`) |
+| `SCAN_SCHEDULER_TICK_SECONDS` | How often the scheduler checks for due domains (default: `900` / 15 min) |
 
 Copy `.env.example` to `.env` before running locally. Set `ANTHROPIC_API_KEY` for AI-assisted categorization. Do not commit `.env`.
 
 ## API
+
+### `GET /scans`
+
+List all persisted crawls, most recent first.
+
+**Response:**
+
+```json
+[
+  {
+    "domain": "example.com",
+    "url": "https://example.com",
+    "pages_crawled": 42,
+    "pages_included": 29,
+    "readiness_total": 74,
+    "has_content_changes": false,
+    "has_unviewed_changes": false,
+    "last_scanned_at": "2026-06-13T12:00:00Z",
+    "generated": true
+  }
+]
+```
+
+### `GET /scans/{domain}`
+
+Return persisted scan data for the analysis page. Used when loading `/analysis/{domain}` directly.
+
+**Response:**
+
+```json
+{
+  "domain": "example.com",
+  "url": "https://example.com",
+  "llms_txt": "# Example\n\n...",
+  "pages_crawled": 42,
+  "pages_included": 29,
+  "readiness": { "total": 74, "categories": [], "recommendations": [] },
+  "has_content_changes": false,
+  "has_unviewed_changes": false,
+  "last_scanned_at": "2026-06-13T12:00:00Z"
+}
+```
+
+`llms_txt` is `null` when the domain was scanned but llms.txt has not been generated yet.
+
+**Errors:** `404` if the domain has never been scanned.
+
+### `POST /scans/{domain}/mark-viewed`
+
+Clear the unviewed notification flag when the user opens the analysis page. Returns the updated scan.
+
+### `POST /scans/{domain}/recrawl`
+
+Re-crawl a domain, compare against the generation baseline, and auto-regenerate llms.txt when content changed. Manual recrawls do not set the home-screen unviewed badge.
+
+`POST /scans/{domain}/refresh` is an alias for recrawl.
+
+**Response:**
+
+```json
+{
+  "domain": "example.com",
+  "url": "https://example.com",
+  "pages_crawled": 42,
+  "pages_included": 29,
+  "readiness": { "total": 74, "categories": [], "recommendations": [] },
+  "has_content_changes": false,
+  "has_unviewed_changes": false,
+  "last_scanned_at": "2026-06-13T12:00:00Z",
+  "llms_txt": "# Example\n\n...",
+  "content_changed": true,
+  "regenerated": true
+}
+```
 
 ### `POST /generate`
 
@@ -85,9 +163,17 @@ Crawl a website and return a generated llms.txt file. Used by the frontend.
       { "id": "ai_bot_access", "label": "AI bot access", "score": 20, "max_score": 25 }
     ],
     "recommendations": ["Unblock GPTBot in robots.txt to allow ChatGPT to crawl your site"]
-  }
+  },
+  "has_content_changes": false,
+  "has_unviewed_changes": false
 }
 ```
+
+After each successful generate, scan results are persisted to SQLite. Changes are detected by comparing crawled page hashes to the **generation baseline** (saved when llms.txt was last generated). The home **Updated** badge uses `has_unviewed_changes`, set by the background scheduler when new changes are detected.
+
+### Background scheduler
+
+On startup, a background task re-crawls due domains every 24 hours. When content changes, it auto-regenerates llms.txt and sets `has_unviewed_changes` until the user opens the analysis page.
 
 **Errors:**
 
@@ -103,6 +189,10 @@ backend/
 ├── main.py        # FastAPI routes
 ├── models.py      # Pydantic request/response models
 ├── scan.py        # Crawl + readiness orchestration (run_scan)
+├── db.py          # SQLite persistence for scans and page hashes
+├── changes.py     # Content-hash change detection
+├── regenerate.py  # Recrawl + auto-regenerate orchestration
+├── scheduler.py   # Background 24h rescan loop
 ├── crawler.py     # Async site crawler (httpx)
 ├── readiness.py   # AI readiness scoring from crawl artifacts
 ├── generator.py   # Claude categorization + llms.txt assembly
@@ -142,6 +232,6 @@ backend/
 
 ## Known Limitations
 
-- **Registrable-domain matching is heuristic** (last two hostname labels). Unusual TLDs like `.co.uk` may not group subdomains correctly.
+- **Registrable-domain matching uses `tldextract`** (public suffix list). Edge cases on private suffixes or unusual hostnames may still misclassify internal links.
 - **Page budget is capped at 200.** Large sites will only have a subset represented. Pages are ranked by importance score before selection.
 - **JavaScript-rendered content is not supported.** The crawler fetches raw HTML only. Single-page apps or sites that load content dynamically via JavaScript will return empty or incomplete data.

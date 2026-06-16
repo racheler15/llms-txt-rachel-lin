@@ -13,24 +13,36 @@ React UI for generating spec-compliant [llms.txt](https://llmstxt.org) files fro
 
 | Route | Page | Description |
 |-------|------|-------------|
-| `/` | Home | URL input form |
-| `/analysis` | Analysis | Generated llms.txt output (copy/download) |
+| `/` | Home | URL input form and recent scans |
+| `/analysis/:domain` | Analysis | Readiness score, category breakdown, llms.txt output |
 
 ## Project Structure
 
 ```
 src/
-├── App.tsx              # Router + layout (navbar)
+├── App.tsx
 ├── pages/
 │   ├── Homepage.tsx
 │   └── AnalysisPage.tsx
 ├── components/
 │   ├── navbar/
-│   ├── generator-form/
-│   └── generated-output/
-└── hooks/
-    ├── useGenerate.ts   # POST /generate
-    └── useDownload.ts   # Download llms.txt file
+│   ├── homepage/
+│   │   ├── generator-form/
+│   │   └── recent-scans/
+│   └── analysis/
+│       ├── analysis-overview/
+│       ├── categories-breakdown/
+│       ├── generated-output/
+│       └── readiness-score/
+├── hooks/
+│   ├── useGenerate.ts    # POST /generate
+│   ├── useScan.ts        # GET /scans/{domain}
+│   ├── useRecentScans.ts # GET /scans
+│   ├── useRecrawl.ts     # POST /scans/{domain}/recrawl
+│   ├── useMarkViewed.ts  # POST /scans/{domain}/mark-viewed
+│   └── useDownload.ts
+└── types/
+    └── analysis.ts       # API response mappers
 ```
 
 ## Getting Started
