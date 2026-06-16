@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 import httpx
 
 from changes import detect_changes
+from crawl_errors import ScanError, ScanErrorType
 from crawler import CrawlResult, crawl_site
 from db import get_domain_id, load_generation_hashes, page_hash_map, save_scan
 from readiness import ReadinessResult, compute_readiness
@@ -18,9 +19,20 @@ class ScanResult:
     domain_id: int | None = None
 
 
+def _check_crawl(crawl: CrawlResult) -> None:
+    if crawl.robots_blocked:
+        raise ScanError(ScanErrorType.ROBOTS_BLOCKED)
+    if crawl.homepage_timed_out:
+        raise ScanError(ScanErrorType.TIMEOUT)
+    if not crawl.pages:
+        raise ScanError(ScanErrorType.NO_PAGES)
+
+
 async def run_scan(url: str, *, persist: bool = True) -> ScanResult:
     async with httpx.AsyncClient() as client:
         crawl = await crawl_site(url, client=client)
+
+    _check_crawl(crawl)
     readiness = compute_readiness(crawl)
 
     has_content_changes = False

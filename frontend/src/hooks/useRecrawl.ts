@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { mapScanResponse, type AnalysisData } from '../types/analysis'
+import { parseApiError } from '../types/errors'
 import { recentScansQueryKey } from './useRecentScans'
 import { scanQueryKey } from './useScan'
 
@@ -21,8 +22,7 @@ export function useRecrawl(domain: string | undefined) {
 
       if (!response.ok) {
         const body = await response.json().catch(() => null)
-        const message = typeof body?.detail === 'string' ? body.detail : `Server returned ${response.status}`
-        throw new Error(message)
+        throw parseApiError(body, `Server returned ${response.status}`)
       }
 
       const data = await response.json()

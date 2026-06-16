@@ -1,5 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
 import { mapGenerateResponse, type AnalysisData } from '../types/analysis'
+import { parseApiError } from '../types/errors'
 
 const GENERATE_API_URL = `${import.meta.env.VITE_API_URL}/generate`
 
@@ -17,8 +18,7 @@ export function useGenerate() {
           throw new Error('Please enter a valid URL starting with http:// or https://')
         }
         const body = await response.json().catch(() => null)
-        const message = typeof body?.detail === 'string' ? body.detail : `Server returned ${response.status}`
-        throw new Error(message)
+        throw parseApiError(body, `Server returned ${response.status}`)
       }
 
       const data = await response.json()

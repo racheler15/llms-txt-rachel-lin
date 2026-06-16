@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import logging
 from urllib.parse import urlparse
 
+from crawl_errors import ScanError, error_detail, HTTP_STATUS
 from db import finalize_generation, get_stored_scan, init_db, list_recent_scans, mark_viewed
 from models import (
     CrawlRequest,
@@ -43,6 +44,13 @@ app.add_middleware(
 
 def _normalize_domain_param(domain: str) -> str:
     return display_domain(domain.strip().lower().removeprefix("www."))
+
+
+def _raise_scan_error(exc: ScanError) -> None:
+    raise HTTPException(
+        status_code=HTTP_STATUS[exc.error_type],
+        detail=error_detail(exc),
+    )
 
 
 def _to_readiness_response(result: ReadinessResult) -> ReadinessResponse:
@@ -128,7 +136,11 @@ async def recrawl_scan(domain: str):
     if not stored:
         raise HTTPException(status_code=404, detail="No scan found for this domain.")
 
-    result = await recrawl_domain(display_name, stored["url"], mark_unviewed=False)
+    try:
+        result = await recrawl_domain(display_name, stored["url"], mark_unviewed=False)
+    except ScanError as exc:
+        _raise_scan_error(exc)
+
     updated = get_stored_scan(display_name)
     if not updated:
         raise HTTPException(status_code=404, detail="No scan found for this domain.")
@@ -147,11 +159,12 @@ async def refresh_scan(domain: str):
 
 @app.post("/generate", response_model=GenerateResponse)
 async def generate(request: CrawlRequest):
-    scan = await run_scan(str(request.url))
-    pages = scan.crawl.pages
-    if not pages:
-        raise HTTPException(status_code=404, detail="No pages could be crawled from this site.")
+    try:
+        scan = await run_scan(str(request.url))
+    except ScanError as exc:
+        _raise_scan_error(exc)
 
+    pages = scan.crawl.pages
     llms_txt, pages_included = await build_llms_txt(pages)
     hostname = urlparse(str(request.url)).hostname or ""
     domain = display_domain(hostname)

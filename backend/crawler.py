@@ -58,6 +58,8 @@ class CrawlResult:
     homepage_signals: HomepageSignals | None
     llms_txt_exists: bool
     http_errors: int = 0
+    robots_blocked: bool = False
+    homepage_timed_out: bool = False
 
 
 MAX_PAGES = 200
@@ -206,6 +208,23 @@ def _extract_page_data(html: str, page_url: str, base_domain: str) -> dict:
         "homepage_signals": _extract_homepage_signals(soup),
         "internal_links": internal_links,
     }
+
+
+async def _probe_homepage_timeout(client: httpx.AsyncClient, base_url: str) -> bool:
+    """Return True if the homepage request timed out."""
+    try:
+        await client.get(base_url, timeout=TIMEOUT, follow_redirects=True)
+        return False
+    except (
+        httpx.TimeoutException,
+        httpx.ReadTimeout,
+        httpx.ConnectTimeout,
+        httpx.WriteTimeout,
+        httpx.PoolTimeout,
+    ):
+        return True
+    except Exception:
+        return False
 
 
 async def _load_robots(
@@ -680,6 +699,24 @@ async def crawl_site(
         robots, robots_sitemaps, robots_text, robots_status = await _load_robots(
             active_client, base_url
         )
+        robots_blocked = not robots.can_fetch("*", base_url)
+        homepage_timed_out = (
+            False
+            if robots_blocked
+            else await _probe_homepage_timeout(active_client, base_url)
+        )
+        if robots_blocked or homepage_timed_out:
+            return CrawlResult(
+                pages=[],
+                base_url=base_url,
+                sitemap_exists=False,
+                robots_text=robots_text,
+                robots_status=robots_status,
+                homepage_signals=None,
+                llms_txt_exists=False,
+                robots_blocked=robots_blocked,
+                homepage_timed_out=homepage_timed_out,
+            )
         sitemap_candidates = _sitemap_candidate_urls(base_url, robots_sitemaps)
         if robots_sitemaps:
             logger.info("robots.txt declared %d sitemap(s): %s", len(robots_sitemaps), robots_sitemaps)
@@ -793,6 +830,8 @@ async def crawl_site(
             homepage_signals=homepage_signals,
             llms_txt_exists=llms_txt_exists,
             http_errors=fetch_stats.http_errors,
+            robots_blocked=robots_blocked,
+            homepage_timed_out=homepage_timed_out,
         )
 
     if client is not None:
