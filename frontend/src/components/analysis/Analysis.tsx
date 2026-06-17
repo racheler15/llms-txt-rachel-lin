@@ -9,6 +9,7 @@ import AnalysisOverview from './analysis-overview/AnalysisOverview'
 import CategoriesBreakdown from './categories-breakdown/CategoriesBreakdown'
 import { extractHostnameFromLlmsTxt, formatScannedLabel, parseLlmsTxtStats } from './analysisUtils'
 import GeneratedOutput from './generated-output/GeneratedOutput'
+import CrawlWarning from './crawl-warning/CrawlWarning'
 import ReadinessScore from './readiness-score/ReadinessScore'
 import './Analysis.css'
 
@@ -90,6 +91,7 @@ function Analysis() {
         isRescanning={isRescanning || isFetching}
         onRescan={handleRescan}
       />
+      {analysis.readiness?.js_rendering_likely && <CrawlWarning />}
       {analysis.readiness && <ReadinessScore readiness={analysis.readiness} />}
       {llmsTxt && <CategoriesBreakdown llmsTxt={llmsTxt} />}
       {llmsTxt ? (

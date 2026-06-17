@@ -6,12 +6,13 @@ from constants import (
     HIGH_VALUE_SEGMENTS,
     HARD_SKIP_PATTERNS,
     MAX_DEPTH,
+    MAX_SITEMAP_PATH_SEGMENTS,
     OPTIONAL_CAP,
     OPTIONAL_PATTERNS,
     TIER_1_SIZE,
 )
 from models import Page
-from url_utils import dedupe_pages, normalize_url
+from url_utils import dedupe_pages, normalize_url, should_skip_url
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,22 @@ def should_exclude_crawl_candidate(url: str, *, exclude_legal: bool = True) -> b
     if LOCALE_PATTERN.match(path):
         return True
     if exclude_legal and "/legal/" in path.lower():
+        return True
+    return False
+
+
+def should_exclude_sitemap_entry(url: str) -> bool:
+    """Drop low-value URLs during sitemap parse so the URL budget fills with useful pages."""
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    if should_skip_url(path, parsed.query):
+        return True
+    if should_exclude_crawl_candidate(url, exclude_legal=False):
+        return True
+    segments = [segment for segment in path.rstrip("/").split("/") if segment]
+    if len(segments) > MAX_SITEMAP_PATH_SEGMENTS:
+        return True
+    if len(segments) >= 2 and matches_optional_pattern(url):
         return True
     return False
 

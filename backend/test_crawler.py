@@ -3,16 +3,22 @@ from bs4 import BeautifulSoup
 from constants import COMMON_DOC_PATHS, DOC_PATH_GUESS_THRESHOLD
 from crawler import (
     SitemapBudget,
+    _build_title,
     _collect_sitemap_priorities,
     _fetch_with_retry,
     _merge_sitemap_priorities,
     _nested_sitemaps_to_fetch,
+    _optional_reserve_urls,
     _parse_sitemap_priorities,
     _prioritize_nested_sitemaps,
     _seed_crawl_queue,
 )
 from models import Page
-from scoring import calculate_importance_score, should_exclude_crawl_candidate
+from scoring import (
+    calculate_importance_score,
+    should_exclude_crawl_candidate,
+    should_exclude_sitemap_entry,
+)
 from url_utils import dedupe_pages, is_internal_link, normalize_url, should_skip_url
 
 
@@ -35,6 +41,26 @@ def test_url_normalization():
     assert normalize_url("https://stripe.com/pricing?utm_source=x") == "https://stripe.com/pricing"
 
 
+def test_build_title_prefers_og_title_when_title_is_global():
+    html = """
+    <html><head>
+      <title>Acme: Global Site Title</title>
+      <meta property="og:title" content="Help Center - Acme" />
+    </head><body><h1>How can we help?</h1></body></html>
+    """
+    assert _build_title(BeautifulSoup(html, "lxml")) == "Help Center - Acme"
+
+
+def test_build_title_falls_back_to_title_when_og_missing():
+    html = "<html><head><title>About Us</title></head><body></body></html>"
+    assert _build_title(BeautifulSoup(html, "lxml")) == "About Us"
+
+
+def test_build_title_falls_back_to_h1_when_title_and_og_missing():
+    html = "<html><head></head><body><h1>Contact</h1></body></html>"
+    assert _build_title(BeautifulSoup(html, "lxml")) == "Contact"
+
+
 def test_internal_link_check_includes_subdomains():
     assert is_internal_link("https://docs.stripe.com/api", "stripe.com") is True
     assert is_internal_link("https://google.com", "stripe.com") is False
@@ -43,6 +69,14 @@ def test_internal_link_check_includes_subdomains():
 def test_locale_filter():
     assert should_exclude_crawl_candidate("https://stripe.com/fr-fr/pricing") is True
     assert should_exclude_crawl_candidate("https://stripe.com/pricing") is False
+
+
+def test_should_exclude_sitemap_entry_filters_deep_and_blog_posts():
+    assert should_exclude_sitemap_entry("https://example.com/docs") is False
+    assert should_exclude_sitemap_entry("https://example.com/blog") is False
+    assert should_exclude_sitemap_entry("https://example.com/blog/2024/my-post") is True
+    assert should_exclude_sitemap_entry("https://example.com/a/b/c/d/e/page") is True
+    assert should_exclude_sitemap_entry("https://example.com/login") is True
 
 
 def test_importance_score_prioritizes_shallow_pages():
@@ -311,6 +345,14 @@ def test_fetch_with_retry_recovers_from_timeout():
     assert response is not None
     assert response.status_code == 200
     assert attempts == 2
+
+
+def test_optional_reserve_urls_merges_guesses_when_sitemap_has_optional_urls():
+    sitemap = {"https://example.com/privacy": 0.8}
+    urls = _optional_reserve_urls("https://example.com", sitemap, "example.com")
+    normalized = {normalize_url(url) for url in urls}
+    assert "https://example.com/privacy" in normalized
+    assert "https://example.com/terms" in normalized
 
 
 def test_seed_crawl_queue_guesses_doc_paths_when_sitemap_sparse():

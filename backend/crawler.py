@@ -36,6 +36,7 @@ from scoring import (
     top_optional_sitemap_urls,
     prioritize_sitemap_urls,
     should_exclude_crawl_candidate,
+    should_exclude_sitemap_entry,
 )
 from url_utils import (
     content_hash,
@@ -173,14 +174,19 @@ def _first_meaningful_paragraph(soup: BeautifulSoup) -> str:
 
 def _build_title(soup: BeautifulSoup) -> str:
     title_tag = soup.find("title")
-    title = title_tag.get_text(separator=" ", strip=True) if title_tag else ""
-    if title:
-        return title
+    raw_title = title_tag.get_text(separator=" ", strip=True) if title_tag else ""
     og_title = _meta_content(soup, og_property="og:title")
+    h1_tag = soup.find("h1")
+    h1 = h1_tag.get_text(separator=" ", strip=True) if h1_tag else ""
+
+    # Many sites reuse one global <title>; og:title is usually page-specific.
+    if og_title and og_title != raw_title:
+        return og_title
+    if raw_title:
+        return raw_title
     if og_title:
         return og_title
-    h1_tag = soup.find("h1")
-    return h1_tag.get_text(separator=" ", strip=True) if h1_tag else ""
+    return h1
 
 
 def _build_description(soup: BeautifulSoup, h1: str) -> str:
@@ -431,6 +437,8 @@ def _parse_sitemap_priorities(
             except ValueError:
                 priority = None
         page_url = normalize_url(loc.text.strip())
+        if should_exclude_sitemap_entry(page_url):
+            continue
         entries[page_url] = priority
 
     if entries:
@@ -441,7 +449,10 @@ def _parse_sitemap_priorities(
         if max_entries is not None and len(entries) >= max_entries:
             break
         if loc.text.strip():
-            entries[normalize_url(loc.text.strip())] = None
+            page_url = normalize_url(loc.text.strip())
+            if should_exclude_sitemap_entry(page_url):
+                continue
+            entries[page_url] = None
 
     return entries
 
@@ -772,16 +783,25 @@ def _optional_reserve_urls(
     base_domain: str,
 ) -> list[str]:
     """Return optional-pattern URLs to fetch in the post-main crawl reserve."""
-    optional_urls = top_optional_sitemap_urls(
+    guessed_urls = [urljoin(base_url, path) for path in COMMON_OPTIONAL_PATHS]
+    sitemap_urls = top_optional_sitemap_urls(
         sitemap_priorities,
         base_domain,
         is_internal=is_internal_link,
         should_skip=should_skip_url,
         limit=OPTIONAL_CRAWL_RESERVE,
     )
-    if optional_urls:
-        return optional_urls
-    return [urljoin(base_url, path) for path in COMMON_OPTIONAL_PATHS]
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for url in guessed_urls + sitemap_urls:
+        key = normalize_url(url)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(url)
+
+    return merged[:OPTIONAL_CRAWL_RESERVE]
 
 
 async def _fetch_optional_pages(

@@ -39,6 +39,25 @@ class ReadinessResult:
     categories: list[ReadinessCategory]
     recommendations: list[str]
     max_total: int = 100
+    js_rendering_likely: bool = False
+
+
+def detect_js_limited_crawl(crawl: CrawlResult) -> bool:
+    """True when crawled HTML looks like JS-rendered shells with little text content."""
+    pages = crawl.pages
+    if not pages:
+        return False
+
+    homepage = next((page for page in pages if page.depth == 0), None)
+    if homepage and homepage.word_count < 100:
+        return True
+
+    avg_word_count = sum(page.word_count for page in pages) / len(pages)
+    if avg_word_count < 80:
+        return True
+
+    thin_pages = sum(1 for page in pages if page.word_count < 50)
+    return thin_pages / len(pages) >= 0.4
 
 
 def _parse_robots_sections(robots_text: str) -> dict[str, list[tuple[str, str]]]:
@@ -310,4 +329,5 @@ def compute_readiness(crawl: CrawlResult) -> ReadinessResult:
         total=total,
         categories=categories,
         recommendations=_rank_recommendations(dimensions),
+        js_rendering_likely=detect_js_limited_crawl(crawl),
     )

@@ -95,6 +95,7 @@ def _readiness_to_json(readiness: ReadinessResult) -> str:
             "max_total": readiness.max_total,
             "categories": [asdict(category) for category in readiness.categories],
             "recommendations": readiness.recommendations,
+            "js_rendering_likely": readiness.js_rendering_likely,
         }
     )
 
@@ -153,6 +154,7 @@ def _readiness_from_json(readiness_json: str) -> ReadinessResult:
         ],
         recommendations=parsed["recommendations"],
         max_total=parsed.get("max_total", 100),
+        js_rendering_likely=parsed.get("js_rendering_likely", False),
     )
 
 

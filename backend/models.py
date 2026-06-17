@@ -32,6 +32,7 @@ class ReadinessResponse(BaseModel):
     max_total: int = 100
     categories: list[ReadinessCategoryResponse]
     recommendations: list[str]
+    js_rendering_likely: bool = False
 
 
 class GenerateResponse(BaseModel):

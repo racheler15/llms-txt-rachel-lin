@@ -70,6 +70,7 @@ def _to_readiness_response(result: ReadinessResult) -> ReadinessResponse:
             for category in result.categories
         ],
         recommendations=result.recommendations,
+        js_rendering_likely=result.js_rendering_likely,
     )
 
 

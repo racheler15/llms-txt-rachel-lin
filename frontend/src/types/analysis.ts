@@ -10,6 +10,7 @@ export interface ReadinessResult {
   max_total: number
   categories: ReadinessCategory[]
   recommendations: string[]
+  js_rendering_likely: boolean
 }
 
 export interface AnalysisData {
@@ -37,6 +38,7 @@ export function mapReadinessResult(raw: Record<string, unknown>): ReadinessResul
       label: category.label as string,
     })),
     recommendations: (raw.recommendations as string[]) ?? [],
+    js_rendering_likely: Boolean(raw.js_rendering_likely),
   }
 }
 
