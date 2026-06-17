@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from crawler import (
     SitemapBudget,
     _collect_sitemap_priorities,
+    _fetch_with_retry,
     _merge_sitemap_priorities,
     _nested_sitemaps_to_fetch,
     _parse_sitemap_priorities,
@@ -235,3 +236,76 @@ def test_collect_sitemap_priorities_stops_at_url_budget_before_next_fetch():
     assert "https://example.com/fr" not in merged
     assert any(url.endswith("sitemap_core.xml") for url in fetched)
     assert not any(url.endswith("sitemap_lang.xml") for url in fetched)
+
+
+def test_fetch_with_retry_recovers_from_429():
+    import asyncio
+
+    import httpx
+
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429)
+        return httpx.Response(200, text="ok")
+
+    async def run() -> httpx.Response | None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport, base_url="https://example.com") as client:
+            return await _fetch_with_retry(client, "https://example.com/page")
+
+    response = asyncio.run(run())
+    assert response is not None
+    assert response.status_code == 200
+    assert attempts == 2
+
+
+def test_fetch_with_retry_skips_after_exhausted_429():
+    import asyncio
+
+    import httpx
+
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(429)
+
+    async def run() -> httpx.Response | None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport, base_url="https://example.com") as client:
+            return await _fetch_with_retry(client, "https://example.com/page")
+
+    response = asyncio.run(run())
+    assert response is not None
+    assert response.status_code == 429
+    assert attempts == 3
+
+
+def test_fetch_with_retry_recovers_from_timeout():
+    import asyncio
+
+    import httpx
+
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout("timed out")
+        return httpx.Response(200, text="ok")
+
+    async def run() -> httpx.Response | None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport, base_url="https://example.com") as client:
+            return await _fetch_with_retry(client, "https://example.com/page")
+
+    response = asyncio.run(run())
+    assert response is not None
+    assert response.status_code == 200
+    assert attempts == 2

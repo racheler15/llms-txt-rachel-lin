@@ -31,6 +31,10 @@ The crawler fetches `/robots.txt` before crawling and honors `Disallow` / `Allow
 
 If robots.txt is missing, returns an error, or times out, we use a **fail-open** policy: assume crawling is allowed. This is standard for small crawlers — a missing robots.txt (404) is extremely common, and blocking the whole job would break most sites. When rules are available, we respect them.
 
+### Rate limiting
+
+Failed requests are retried up to 2 times with exponential backoff for rate limiting (429) and timeout errors, after which the page is skipped and the crawl continues.
+
 ## Setup
 
 ```bash
@@ -223,6 +227,7 @@ backend/
 | `MAX_PAGES` | 200 | Maximum number of pages to crawl |
 | `MAX_CONCURRENCY` | 20 | Concurrent HTTP requests per batch |
 | `TIMEOUT` | 5s | HTTP request timeout |
+| `MAX_FETCH_RETRIES` | 2 | Retries for 429 and timeout errors before skipping a page |
 
 ### `generator.py` — llms.txt output limits
 

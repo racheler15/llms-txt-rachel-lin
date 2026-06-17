@@ -12,7 +12,8 @@
 
 .generation-step {
   display: flex;
-  align-items: flex-start;
+  flex-flow: row nowrap;
+  align-items: center;
   gap: 0.625rem;
   font-size: 0.9375rem;
   color: #6b7280;
@@ -41,8 +42,16 @@
   color: #d1d5db;
 }
 
+.generation-step-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+}
+
 .generation-step-label {
-  padding-top: 0.0625rem;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .generation-step-detail {

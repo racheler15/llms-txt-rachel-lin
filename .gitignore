@@ -35,3 +35,6 @@ pnpm-debug.log*
 
 # SQLite scan persistence
 backend/data/
+
+# Railway CLI config pull artifacts
+.railway-config-pull-*/

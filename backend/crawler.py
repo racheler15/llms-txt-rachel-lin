@@ -79,7 +79,45 @@ MAX_PAGES = 200
 MAIN_CRAWL_BUDGET = MAX_PAGES - TIER_2_CANDIDATES
 MAX_CONCURRENCY = 20
 TIMEOUT = 5.0
+MAX_FETCH_RETRIES = 2
 DESCRIPTION_MAX_LENGTH = 320
+
+_TIMEOUT_EXCEPTIONS = (
+    httpx.TimeoutException,
+    httpx.ReadTimeout,
+    httpx.ConnectTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+)
+
+
+async def _fetch_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    timeout: float = TIMEOUT,
+    follow_redirects: bool = True,
+    max_retries: int = MAX_FETCH_RETRIES,
+) -> httpx.Response | None:
+    for attempt in range(max_retries + 1):
+        try:
+            response = await client.get(
+                url, timeout=timeout, follow_redirects=follow_redirects
+            )
+            if response.status_code == 429:
+                if attempt < max_retries:
+                    await asyncio.sleep(2**attempt)
+                    continue
+                return response
+            return response
+        except _TIMEOUT_EXCEPTIONS:
+            if attempt < max_retries:
+                await asyncio.sleep(1)
+                continue
+            return None
+        except Exception:
+            return None
+    return None
 
 
 def _is_html_response(response: httpx.Response) -> bool:
@@ -428,7 +466,10 @@ async def _get_sitemap_priorities(
 
     try:
         async with semaphore:
-            response = await client.get(sitemap_url, timeout=TIMEOUT, follow_redirects=True)
+            response = await _fetch_with_retry(client, sitemap_url)
+        if response is None:
+            logger.warning("Failed to fetch sitemap %s", sitemap_url)
+            return {}, False
         if not response.is_success:
             logger.info("Sitemap fetch failed (%s): %s", response.status_code, sitemap_url)
             return {}, False
@@ -563,7 +604,9 @@ async def _fetch_page(
 
     async with semaphore:
         try:
-            response = await client.get(url, timeout=TIMEOUT, follow_redirects=True)
+            response = await _fetch_with_retry(client, url)
+            if response is None:
+                return None
             if not response.is_success:
                 if fetch_stats is not None:
                     fetch_stats.http_errors += 1
