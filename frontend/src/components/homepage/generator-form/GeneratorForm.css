@@ -55,8 +55,22 @@
 }
 
 .generator-form button:disabled {
-  opacity: 0.5;
+  background: #9ca3af;
+  opacity: 1;
   cursor: not-allowed;
+}
+
+.generator-form button:disabled:hover {
+  background: #9ca3af;
+}
+
+.generator-form button.generator-form-button--pending:disabled {
+  background: #9db3e2;
+  cursor: wait;
+}
+
+.generator-form button.generator-form-button--pending:disabled:hover {
+  background: #9db3e2;
 }
 
 .generator-error {

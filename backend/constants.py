@@ -67,6 +67,15 @@ HIGH_VALUE_SEGMENTS = {
 }
 
 MAX_DEPTH = 3
+MAX_SITEMAP_URLS = 5_000
+MAX_NESTED_SITEMAPS = 8
+MAX_SITEMAP_DEPTH = 3
+SITEMAP_PRIORITY_MARKERS = (
+    "core", "page", "pages", "static", "channel", "post", "blog", "doc",
+)
+SITEMAP_BULK_MARKERS = (
+    "vid", "video", "shorties", "image", "media", "model", "playlist",
+)
 TIER_1_SIZE = 100
 TIER_2_CANDIDATES = 15
 SITEMAP_SEED_LIMIT = 150

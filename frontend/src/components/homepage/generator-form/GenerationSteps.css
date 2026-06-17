@@ -25,7 +25,7 @@
 }
 
 .generation-step--active .generation-step-icon {
-  color: #5b7fd6;
+  color: #6b7280;
   animation: generation-step-pulse 1.5s ease-in-out infinite;
 }
 

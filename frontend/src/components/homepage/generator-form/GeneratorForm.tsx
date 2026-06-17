@@ -45,7 +45,11 @@ function GeneratorForm() {
           onChange={(e) => setUrl(e.target.value)}
           required
         />
-        <button type="submit" disabled={isPending}>
+        <button
+          type="submit"
+          disabled={isPending || !url.trim()}
+          className={isPending ? 'generator-form-button--pending' : undefined}
+        >
           {isPending ? 'Generating...' : 'Generate'}
         </button>
       </form>

@@ -13,6 +13,11 @@ from constants import (
     DOC_PATH_BOOST,
     HOMEPAGE_BOOST,
     MAX_DEPTH,
+    MAX_NESTED_SITEMAPS,
+    MAX_SITEMAP_DEPTH,
+    MAX_SITEMAP_URLS,
+    SITEMAP_BULK_MARKERS,
+    SITEMAP_PRIORITY_MARKERS,
     SITEMAP_SEED_LIMIT,
     TIER_2_CANDIDATES,
 )
@@ -297,13 +302,61 @@ def _sitemap_candidate_urls(base_url: str, robots_sitemaps: list[str]) -> list[s
     return _default_sitemap_candidates(base_url)
 
 
+@dataclass
+class SitemapBudget:
+    max_urls: int = MAX_SITEMAP_URLS
+    max_nested: int = MAX_NESTED_SITEMAPS
+    url_count: int = 0
+    nested_fetched: int = 0
+    capped: bool = False
+
+    def urls_remaining(self) -> int:
+        return max(0, self.max_urls - self.url_count)
+
+    def can_fetch_nested(self) -> bool:
+        return self.nested_fetched < self.max_nested and self.url_count < self.max_urls
+
+    def mark_capped(self, reason: str) -> None:
+        if not self.capped:
+            self.capped = True
+            logger.info("Sitemap enumeration capped: %s", reason)
+
+
+def _is_bulk_sitemap(url: str) -> bool:
+    lower = url.lower()
+    return any(marker in lower for marker in SITEMAP_BULK_MARKERS)
+
+
+def _nested_sitemap_sort_key(url: str) -> tuple[int, str]:
+    lower = url.lower()
+    if _is_bulk_sitemap(url):
+        return (2, url)
+    if any(marker in lower for marker in SITEMAP_PRIORITY_MARKERS):
+        return (0, url)
+    return (1, url)
+
+
+def _prioritize_nested_sitemaps(urls: list[str]) -> list[str]:
+    """Return nested sitemap URLs with structural pages fetched before bulk content."""
+    return sorted(urls, key=_nested_sitemap_sort_key)
+
+
+def _nested_sitemaps_to_fetch(urls: list[str]) -> list[str]:
+    """Prioritize nested sitemaps and drop bulk content indexes entirely."""
+    return [url for url in _prioritize_nested_sitemaps(urls) if not _is_bulk_sitemap(url)]
+
+
 def _merge_sitemap_priorities(
     accumulated: dict[str, float | None],
     incoming: dict[str, float | None],
+    budget: SitemapBudget | None = None,
 ) -> dict[str, float | None]:
     """Merge two dicts of normalized URLs to optional priorities, prioritizing incoming values."""
     merged = dict(accumulated)
     for url, priority in incoming.items():
+        if budget is not None and len(merged) >= budget.max_urls:
+            budget.mark_capped(f"{budget.max_urls} URL limit reached")
+            break
         if url not in merged:
             merged[url] = priority
             continue
@@ -312,14 +365,22 @@ def _merge_sitemap_priorities(
             continue
         if existing is None or priority > existing:
             merged[url] = priority
+    if budget is not None:
+        budget.url_count = len(merged)
     return merged
 
 
-def _parse_sitemap_priorities(soup: BeautifulSoup) -> dict[str, float | None]:
+def _parse_sitemap_priorities(
+    soup: BeautifulSoup,
+    *,
+    max_entries: int | None = None,
+) -> dict[str, float | None]:
     """Given a BeautifulSoup object for a sitemap, return a dict of normalized URLs to their optional priorities."""
     entries: dict[str, float | None] = {}
 
     for url_tag in soup.find_all("url"):
+        if max_entries is not None and len(entries) >= max_entries:
+            break
         loc = url_tag.find("loc")
         if not loc or not loc.text.strip():
             continue
@@ -338,6 +399,8 @@ def _parse_sitemap_priorities(soup: BeautifulSoup) -> dict[str, float | None]:
 
     # fallback if sitemap is flat list of locations
     for loc in soup.find_all("loc"):
+        if max_entries is not None and len(entries) >= max_entries:
+            break
         if loc.text.strip():
             entries[normalize_url(loc.text.strip())] = None
 
@@ -349,10 +412,15 @@ async def _get_sitemap_priorities(
     sitemap_url: str,
     semaphore: asyncio.Semaphore,
     visited: set[str] | None = None,
+    *,
+    depth: int = 0,
+    budget: SitemapBudget | None = None,
 ) -> tuple[dict[str, float | None], bool]:
     """Fetch a sitemap and extract page URLs with optional priorities."""
     if visited is None:
         visited = set()
+    if budget is None:
+        budget = SitemapBudget()
 
     if sitemap_url in visited:
         return {}, False
@@ -367,28 +435,61 @@ async def _get_sitemap_priorities(
         soup = BeautifulSoup(response.text, "lxml-xml")
 
         if soup.find("sitemapindex"):
-            # nested sitemaps: parse and fetch each sitemap url
-            nested_sitemaps = [loc.text.strip() for loc in soup.find_all("loc") if loc.text.strip()]
+            if depth + 1 >= MAX_SITEMAP_DEPTH:
+                logger.info(
+                    "Sitemap index at %s: max depth %d reached, skipping nested sitemaps",
+                    sitemap_url,
+                    MAX_SITEMAP_DEPTH,
+                )
+                return {}, True
+
+            all_nested = [loc.text.strip() for loc in soup.find_all("loc") if loc.text.strip()]
+            nested_sitemaps = _nested_sitemaps_to_fetch(all_nested)
+            skipped_bulk = len(all_nested) - len(nested_sitemaps)
+            if skipped_bulk:
+                logger.info("Skipping %d bulk nested sitemaps", skipped_bulk)
+            remaining_nested = max(0, budget.max_nested - budget.nested_fetched)
             logger.info(
-                "Sitemap index at %s: following %d nested sitemaps",
+                "Sitemap index at %s: following up to %d nested sitemaps (of %d eligible, %d total)",
                 sitemap_url,
+                min(len(nested_sitemaps), remaining_nested),
                 len(nested_sitemaps),
+                len(all_nested),
             )
-            # Recursively fetch each nested sitemap in parallel and merge the results
-            nested_results = await asyncio.gather(
-                *[
-                    _get_sitemap_priorities(client, url, semaphore, visited)
-                    for url in nested_sitemaps
-                ]
-            )
+
             merged: dict[str, float | None] = {}
-            for batch_entries, _ in nested_results:
-                merged = _merge_sitemap_priorities(merged, batch_entries)
+            for url in nested_sitemaps:
+                if budget.nested_fetched >= budget.max_nested:
+                    budget.mark_capped(f"{budget.max_nested} nested sitemap limit reached")
+                    break
+                if budget.url_count >= budget.max_urls:
+                    break
+
+                budget.nested_fetched += 1
+                batch_entries, _ = await _get_sitemap_priorities(
+                    client,
+                    url,
+                    semaphore,
+                    visited,
+                    depth=depth + 1,
+                    budget=budget,
+                )
+                if batch_entries:
+                    merged = _merge_sitemap_priorities(merged, batch_entries, budget)
+                if budget.url_count >= budget.max_urls:
+                    break
+
             logger.info("Sitemap index at %s: resolved to %d URLs", sitemap_url, len(merged))
             return merged, True
 
-        # flat sitemap: parse and return URLs with optional priorities
-        entries = _parse_sitemap_priorities(soup)
+        remaining_urls = budget.urls_remaining()
+        if remaining_urls <= 0:
+            budget.mark_capped(f"{budget.max_urls} URL limit reached")
+            return {}, True
+
+        entries = _parse_sitemap_priorities(soup, max_entries=remaining_urls)
+        if len(entries) >= remaining_urls:
+            budget.mark_capped(f"{budget.max_urls} URL limit reached")
         logger.info("Sitemap at %s: parsed %d URLs", sitemap_url, len(entries))
         return entries, True
     except Exception:
@@ -400,22 +501,35 @@ async def _collect_sitemap_priorities(
     client: httpx.AsyncClient,
     candidate_urls: list[str],
     semaphore: asyncio.Semaphore,
+    budget: SitemapBudget | None = None,
 ) -> tuple[dict[str, float | None], bool]:
     """Fetch and merge entries from one or more sitemap URLs."""
+    if budget is None:
+        budget = SitemapBudget()
     merged: dict[str, float | None] = {}
     sitemap_exists = False
     for sitemap_url in candidate_urls:
-        entries, found = await _get_sitemap_priorities(client, sitemap_url, semaphore)
+        if budget.url_count >= budget.max_urls:
+            break
+        entries, found = await _get_sitemap_priorities(
+            client, sitemap_url, semaphore, budget=budget
+        )
         if found:
             sitemap_exists = True
         if entries:
-            merged = _merge_sitemap_priorities(merged, entries)
+            merged = _merge_sitemap_priorities(merged, entries, budget)
             logger.info(
                 "Merged sitemap source %s (%d URLs); running total %d URLs",
                 sitemap_url,
                 len(entries),
                 len(merged),
             )
+    if budget.capped:
+        logger.info(
+            "Sitemap enumeration finished with cap (%d URLs, %d nested sitemaps fetched)",
+            budget.url_count,
+            budget.nested_fetched,
+        )
     return merged, sitemap_exists
 
 

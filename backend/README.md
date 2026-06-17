@@ -212,6 +212,9 @@ backend/
 | `TIER_2_CANDIDATES` | 15 | Pages scanned for the Optional section |
 | `OPTIONAL_CAP` | 8 | Max links in the `## Optional` section |
 | `SITEMAP_SEED_LIMIT` | 150 | Max sitemap URLs seeded into the crawl queue |
+| `MAX_SITEMAP_URLS` | 5,000 | Max page URLs parsed from sitemaps |
+| `MAX_NESTED_SITEMAPS` | 8 | Max child sitemap documents fetched |
+| `MAX_SITEMAP_DEPTH` | 3 | Max sitemap index nesting depth |
 
 ### `crawler.py` — HTTP crawl tuning
 
