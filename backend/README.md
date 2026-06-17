@@ -11,11 +11,11 @@ flowchart TD
   input[Input URL] --> normalize[Normalize to scheme://hostname]
   normalize --> robots[Fetch robots.txt]
   robots --> sitemap[Discover sitemaps]
-  sitemap --> crawl[Priority crawl max 200 pages]
+  sitemap --> crawl[Priority crawl max 200 pages — 429/timeout retry]
   crawl --> readiness[AI readiness score]
   readiness --> persist[Save scan to SQLite]
-  persist --> tier[Rank and split tiers]
-  tier --> claude[Claude Haiku categorizes Tier 1]
+  persist --> rank[Rank pages by importance]
+  rank --> claude[Claude Haiku categorizes top 100]
   claude --> optional[Add Optional section]
   optional --> output[Assemble llms.txt]
 ```
@@ -44,20 +44,21 @@ Sitemaps are the primary URL source when available. Discovery follows this order
 | 2 | Fallback to `/sitemap.xml` and `/sitemap_index.xml` | Large sites often use `sitemap_index.xml` (a sitemap of sitemaps) instead of a single file. |
 | 3 | Merge priorities across sitemaps | Same URL in multiple sitemaps → keep the **higher** `<priority>` value (`_merge_sitemap_priorities` in `crawler.py`). |
 | 4 | Seed crawl queue | Top 150 sitemap URLs by pre-crawl score enter the priority queue; BFS link discovery fills gaps. |
+| 5 | Guess common doc paths | Only when the sitemap has **fewer than 20 URLs** — seed paths like `/docs` and `/getting-started` so doc-heavy sites without a sitemap still get covered. Skipped when the sitemap is already rich to avoid wasting crawl budget on speculative 404s. |
 
-Nested sitemap indexes are followed recursively (depth and count capped). Bulk sitemaps (video/model indexes) are deprioritized or skipped to protect the 200-page crawl budget.
-
-If no sitemap is available, the crawler falls back to BFS from the homepage.
+Nested sitemap indexes are followed recursively (depth and count capped). Bulk sitemaps (video/model indexes) are deprioritized or skipped to protect the 200-page crawl budget. Optional-pattern URLs (`/privacy`, `/terms`, …) are guessed in the post-crawl reserve only when the sitemap did not surface them.
 
 ### Crawl strategy
 
-1. **Normalize** the input URL to a root origin (`scheme://hostname`).
-2. **Discover sitemaps** — read `Sitemap:` URLs from `robots.txt`, then fall back to `/sitemap.xml` and `/sitemap_index.xml`. Nested sitemap indexes are fetched recursively. Seed the crawl queue with discovered `<loc>` entries.
-3. **Fall back to BFS** from the homepage when no sitemap is available, following internal links up to `MAX_DEPTH` (default 3).
-4. For each page, extract **title**, **meta description**, **h1**, and a **content hash** for dedup.
-5. Stop after `MAX_PAGES` (default 200) pages — 185 main crawl + 15 optional reserve.
+After [sitemap discovery](#sitemap-discovery) seeds the queue (homepage, sitemap URLs, and conditional doc-path guesses), the crawler:
 
-Pages are fetched in priority-queue order (highest importance score first, then depth, then URL).
+1. **Priority queue** — fetch pages in score order (importance, then depth, then URL).
+2. **BFS link discovery** — follow internal links from each fetched page up to `MAX_DEPTH` (default 3).
+3. **Extract** title, meta description, h1, and a content hash per page.
+4. **Budget** — stop at `MAX_PAGES` (default 200): 185 main crawl + 15 optional reserve.
+5. **HTTP resilience** — retry **429** (exponential backoff: 1s, 2s) and timeouts (1s) up to `MAX_FETCH_RETRIES` (default 2); skip the page and continue after that.
+
+See [Rate limiting](#rate-limiting) for the retry flow.
 
 ### Page selection (llms.txt pipeline)
 
@@ -65,11 +66,9 @@ Pages are pre-filtered using a deterministic importance score (inbound link coun
 
 1. **Pre-filter** — hard-skip patterns drop auth, search, asset, and noisy query-param URLs.
 2. **Crawl** — up to 200 pages (185 main + 15 optional reserve for legal/press/blog paths).
-3. **Tier 1 (top 100)** — sent to Claude Haiku; model picks **20** most useful pages and groups them into 4–6 site-specific `##` sections.
-4. **Tier 2 (next 15)** — scanned for optional-pattern URLs (legal, press, careers, blog); up to **8** populate `## Optional`.
+3. **Top 100** — sent to Claude Haiku; model picks **30** most useful pages and groups them into 4–6 site-specific `##` sections.
+4. **Optional** — any crawled page outside the top 100 whose URL matches optional patterns (legal, press, careers, blog); up to **8** populate `## Optional`.
 5. **Omitted** — remaining pages are intentionally excluded. llms.txt represents the most important parts of a site, not an exhaustive index.
-
-Pages are ranked by importance score. The top 100 are categorized into main sections. The next tier is scanned for genuinely low-priority pages to populate a capped Optional section. Remaining pages are intentionally omitted.
 
 ### Approaches considered
 
@@ -80,7 +79,7 @@ Pages are ranked by importance score. The top 100 are categorized into main sect
 | Two-pass LLM (pick top N, then group) | Two API calls; slower, less deterministic, still unreliable |
 | **Chosen: code scores → LLM categorizes top tier** | More deterministic, faster, cheaper; LLM only does grouping and naming |
 
-The chosen approach uses a single **Claude Haiku** call for categorization (plus an optional second call for site description when meta tags are missing). Without an API key, a deterministic fallback groups the top 20 pages under a single `Main` section.
+The chosen approach uses a single **Claude Haiku** call for categorization (plus an optional second call for site description when meta tags are missing). Without an API key, a deterministic fallback groups the top 30 pages under a single `Main` section.
 
 ### Deduplication
 
@@ -95,7 +94,19 @@ If robots.txt is missing, returns an error, or times out, we use a **fail-open**
 
 ### Rate limiting
 
-Failed requests are retried up to 2 times with exponential backoff for rate limiting (429) and timeout errors, after which the page is skipped and the crawl continues.
+Each HTTP fetch uses `_fetch_with_retry()` in `crawler.py`. On **429 Too Many Requests**, the crawler waits `2^attempt` seconds (1s, then 2s) and retries up to `MAX_FETCH_RETRIES` (default 2). Timeouts get a 1s pause between attempts. After retries are exhausted, that page is skipped and the crawl continues — the job does not fail outright.
+
+```mermaid
+flowchart LR
+  fetch[HTTP GET] --> ok{Status?}
+  ok -->|2xx| done[Parse page]
+  ok -->|429| wait429["Backoff 2^attempt s"]
+  ok -->|timeout| waitT["Wait 1s"]
+  wait429 --> retry{Retries left?}
+  waitT --> retry
+  retry -->|yes| fetch
+  retry -->|no| skip[Skip page]
+```
 
 ## Setup
 
@@ -248,7 +259,7 @@ Same as `POST /generate`, but streams progress as Server-Sent Events. Used by th
 | `complete` | Full generate response | Generation finished |
 | `error` | `{ "detail": "..." }` | Generation failed |
 
-After each successful generate, scan results are persisted to SQLite. Changes are detected by comparing crawled page hashes to the **generation baseline** (saved when llms.txt was last generated). The home **Updated** badge uses `has_unviewed_changes`, set by the background scheduler when new changes are detected.
+After each successful generate, scan results are persisted to SQLite. See [Database](#database) for schema and change-detection details.
 
 ### Background scheduler
 
@@ -259,6 +270,50 @@ On startup, a background task re-crawls due domains every 24 hours. When content
 | Status | Detail |
 |--------|--------|
 | 422 | Invalid URL, robots blocked, or no pages could be crawled from this site |
+
+## Database
+
+SQLite persistence in `db.py`. Default path: `backend/data/scans.db` (override with `SCAN_DB_PATH`).
+
+### Schema
+
+Two tables split **summary state** from **per-page detail**:
+
+**`domains`** — one row per scanned site
+
+| Column | Purpose |
+|--------|---------|
+| `url`, `display_domain` | Normalized input URL and display name (both unique) |
+| `last_scanned_at` | Timestamp of most recent crawl |
+| `llms_txt` | Generated llms.txt output |
+| `readiness_json` | AI readiness score and category breakdown |
+| `pages_crawled`, `pages_included` | Crawl count vs links in the generated file |
+| `generation_hashes_json` | Snapshot of `{url: content_hash}` when llms.txt was last generated — the **baseline** for change detection |
+| `has_unviewed_changes` | Drives the home page **Updated** badge |
+
+**`pages`** — one row per crawled page
+
+| Column | Purpose |
+|--------|---------|
+| `domain_id` | Foreign key to `domains` |
+| `url` | Normalized page URL |
+| `content_hash` | Hash of page body text |
+| `title`, `meta_description`, `word_count` | Crawl metadata |
+
+**Relationship:** one domain → many pages. `FOREIGN KEY (domain_id) REFERENCES domains(id) ON DELETE CASCADE`. `UNIQUE(domain_id, url)` prevents duplicate page rows.
+
+### Why two tables
+
+`domains` holds the current summary and is updated on every rescan. `pages` must be queried and compared independently — e.g. current crawled hashes vs the generation baseline. Storing everything in one row would make that awkward and grow unbounded.
+
+On `save_scan()`, old `pages` rows for the domain are deleted and replaced with fresh crawl data. The domain row’s readiness and crawl counts are updated; `llms_txt` and `generation_hashes_json` are left unchanged until generation runs again.
+
+### Change detection
+
+1. **`finalize_generation()`** — after llms.txt is generated, copies current page hashes into `generation_hashes_json` and clears `has_unviewed_changes`.
+2. **Next crawl** — `save_scan()` refreshes `pages` with new hashes.
+3. **`detect_changes()`** — compares current `pages` hashes to `generation_hashes_json`. If URLs or hashes differ, content changed since the last generation.
+4. **Scheduler / badge** — on change, `has_unviewed_changes` is set (scheduler auto-regenerates llms.txt when a prior file exists). Opening the analysis page calls `mark_viewed()` to clear the badge.
 
 ## Project layout
 
@@ -274,12 +329,14 @@ backend/
 ├── crawler.py     # Async site crawler (httpx)
 ├── readiness.py   # AI readiness scoring from crawl artifacts
 ├── generator.py   # Claude categorization + llms.txt assembly
-├── scoring.py     # Page importance ranking and tier selection
+├── scoring.py     # Page importance ranking and optional-page selection
 ├── url_utils.py   # URL normalization, dedup, skip filters
 └── constants.py   # Shared limits, patterns, and crawl tuning
 ```
 
 ## Configuration
+
+Defaults are tuned for fast, predictable demo runs during the take-home. Limits live as constants in the files below — raising them scales the pipeline without changing its logic, at the cost of slower crawls and higher LLM usage.
 
 ### `constants.py` — shared limits
 
@@ -287,9 +344,10 @@ backend/
 |----------|---------|-------------|
 | `MAX_DEPTH` | 3 | Maximum BFS link-follow depth |
 | `TIER_1_SIZE` | 100 | Pages sent to Claude for main sections |
-| `TIER_2_CANDIDATES` | 15 | Pages scanned for the Optional section |
+| `OPTIONAL_CRAWL_RESERVE` | 15 | Crawl slots reserved for optional-pattern URLs |
 | `OPTIONAL_CAP` | 8 | Max links in the `## Optional` section |
 | `SITEMAP_SEED_LIMIT` | 150 | Max sitemap URLs seeded into the crawl queue |
+| `DOC_PATH_GUESS_THRESHOLD` | 20 | Guess common doc paths only when merged sitemap URL count is below this |
 | `MAX_SITEMAP_URLS` | 5,000 | Max page URLs parsed from sitemaps |
 | `MAX_NESTED_SITEMAPS` | 8 | Max child sitemap documents fetched |
 | `MAX_SITEMAP_DEPTH` | 3 | Max sitemap index nesting depth |
@@ -307,7 +365,7 @@ backend/
 
 | Constant | Default | Description |
 |----------|---------|-------------|
-| `MAX_PAGES_TO_SELECT` | 20 | Pages Claude picks for main sections |
+| `MAX_PAGES_TO_SELECT` | 30 | Pages Claude picks for main sections |
 | `MAX_LINKS_PER_SECTION` | 15 | Max links per `##` section |
 | `MAX_TOTAL_LINKS` | 100 | Max links across the whole file |
 | `MIN_DESCRIPTION_LENGTH` | 20 | Min description length to include a link |
