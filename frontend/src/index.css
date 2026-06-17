@@ -4,11 +4,31 @@
   padding: 0;
 }
 
+:root {
+  --page-padding-x: clamp(1rem, 4vw, 12.5rem);
+  --page-max-width: 72rem;
+}
+
+@media (max-width: 640px) {
+  :root {
+    --page-padding-x: 1.25rem;
+  }
+}
+
 body {
   font-family: 'Inter', sans-serif;
   background: #fbf8f0;
   color: #111;
   min-height: 100vh;
-  padding: 0 20%;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+.app-shell {
+  width: 100%;
+  max-width: var(--page-max-width);
+  margin: 0 auto;
+  padding: 0 var(--page-padding-x);
+  min-height: 100vh;
 }
 

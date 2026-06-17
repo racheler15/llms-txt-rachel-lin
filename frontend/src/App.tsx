@@ -8,10 +8,10 @@ const queryClient = new QueryClient()
 
 function Layout() {
   return (
-    <>
+    <div className="app-shell">
       <Navbar />
       <Outlet />
-    </>
+    </div>
   )
 }
 

@@ -47,7 +47,8 @@
 .recent-scans-item-main {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.5rem;
   margin-bottom: 0.25rem;
 }
 
@@ -55,6 +56,8 @@
   font-size: 0.95rem;
   font-weight: 600;
   color: #111;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .recent-scans-updated {
@@ -77,4 +80,19 @@
   gap: 0.35rem;
   font-size: 0.85rem;
   color: #6b6b6b;
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  .recent-scans {
+    margin-top: 2rem;
+  }
+
+  .recent-scans-heading {
+    font-size: 1rem;
+  }
+
+  .recent-scans-item-meta {
+    font-size: 0.8125rem;
+  }
 }

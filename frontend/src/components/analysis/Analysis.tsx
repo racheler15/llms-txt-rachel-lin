@@ -71,6 +71,7 @@ function Analysis() {
   const scannedLabel = analysis.lastScannedAt
     ? formatScannedLabel(analysis.lastScannedAt)
     : 'scanned just now'
+  const domain = analysis.domain || domainParam || extractHostnameFromLlmsTxt(llmsTxt ?? '')
 
   async function handleRescan() {
     await recrawl()
@@ -80,7 +81,7 @@ function Analysis() {
   return (
     <>
       <AnalysisOverview
-        domain={analysis.domain || domainParam || extractHostnameFromLlmsTxt(llmsTxt ?? '')}
+        domain={domain}
         pagesCrawled={analysis.pagesCrawled}
         pagesIncluded={analysis.pagesIncluded ?? parsedPagesIncluded}
         categoryCount={categoryCount}
@@ -92,7 +93,7 @@ function Analysis() {
       {analysis.readiness && <ReadinessScore readiness={analysis.readiness} />}
       {llmsTxt && <CategoriesBreakdown llmsTxt={llmsTxt} />}
       {llmsTxt ? (
-        <GeneratedOutput llmsTxt={llmsTxt} />
+        <GeneratedOutput llmsTxt={llmsTxt} domain={domain} />
       ) : (
         <section className="analysis-missing-output">
           <p>No llms.txt has been generated for this domain yet.</p>

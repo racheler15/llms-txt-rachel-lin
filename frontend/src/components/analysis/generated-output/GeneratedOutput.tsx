@@ -3,10 +3,12 @@ import './GeneratedOutput.css'
 
 interface GeneratedOutputProps {
   llmsTxt: string
+  domain: string
 }
 
-function GeneratedOutput({ llmsTxt }: GeneratedOutputProps) {
-  const handleDownload = useDownload(llmsTxt, 'llms.txt')
+function GeneratedOutput({ llmsTxt, domain }: GeneratedOutputProps) {
+  const filename = `${domain}.llms.txt`
+  const handleDownload = useDownload(llmsTxt, filename)
 
   function handleCopy() {
     navigator.clipboard.writeText(llmsTxt)
@@ -16,7 +18,7 @@ function GeneratedOutput({ llmsTxt }: GeneratedOutputProps) {
     <section className="generated-output-container">
       <div className="generated-output-code">
         <div className="generated-output-code-header">
-          <span>llms.txt</span>
+          <span>{filename}</span>
           <div className="generated-output-actions">
             <button className="generated-output-action-btn" onClick={handleCopy}>
               Copy

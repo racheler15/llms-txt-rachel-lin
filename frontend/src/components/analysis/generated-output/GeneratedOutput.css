@@ -10,6 +10,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   background: #0f172a;
   color: #94a3b8;
   padding: 0.5rem 1rem;
@@ -44,10 +46,20 @@
   padding: 1rem;
   border-radius: 0 0 8px 8px;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   font-family: ui-monospace, monospace;
-  font-size: 0.8rem;
+  font-size: clamp(0.7rem, 2.5vw, 0.8rem);
   white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
   line-height: 1.5;
-  max-height: 600px;
+  max-height: min(600px, 60vh);
   overflow-y: auto;
+}
+
+@media (max-width: 480px) {
+  .generated-output-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }

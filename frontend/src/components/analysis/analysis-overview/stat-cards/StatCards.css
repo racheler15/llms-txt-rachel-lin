@@ -1,13 +1,13 @@
 .stat-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
   gap: 1rem;
 }
 
 .stat-card {
   background: #f3efe6;
   border-radius: 10px;
-  padding: 1.25rem 1.5rem;
+  padding: clamp(1rem, 3vw, 1.25rem) clamp(1rem, 4vw, 1.5rem);
 }
 
 .stat-card-label {
@@ -19,7 +19,7 @@
 
 .stat-card-value {
   display: block;
-  font-size: 1.75rem;
+  font-size: clamp(1.35rem, 5vw, 1.75rem);
   font-weight: 600;
   color: #111;
   line-height: 1.2;
