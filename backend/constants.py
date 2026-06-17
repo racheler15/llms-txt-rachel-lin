@@ -77,8 +77,9 @@ SITEMAP_BULK_MARKERS = (
     "vid", "video", "shorties", "image", "media", "model", "playlist",
 )
 TIER_1_SIZE = 100
-TIER_2_CANDIDATES = 15
+OPTIONAL_CRAWL_RESERVE = 15
 SITEMAP_SEED_LIMIT = 150
+DOC_PATH_GUESS_THRESHOLD = 20
 OPTIONAL_CAP = 8
 OPTIONAL_SECTION_NAME = "Optional"
 HOMEPAGE_BOOST = 1000
@@ -99,7 +100,7 @@ HARD_SKIP_PATTERNS = [
     ".pdf", ".zip", ".css", ".js",
 ]
 
-# Low-priority pages eligible for the spec ## Optional section (Tier 2)
+# Low-priority pages eligible for the spec ## Optional section
 OPTIONAL_PATTERNS = [
     "/terms", "/privacy", "/legal", "/policy",
     "/tos", "/cookies", "/compliance",

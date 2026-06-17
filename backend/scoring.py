@@ -9,7 +9,6 @@ from constants import (
     OPTIONAL_CAP,
     OPTIONAL_PATTERNS,
     TIER_1_SIZE,
-    TIER_2_CANDIDATES,
 )
 from models import Page
 from url_utils import dedupe_pages, normalize_url
@@ -209,12 +208,10 @@ def rank_pages_by_importance(pages: list[Page]) -> list[Page]:
     )
 
 
-def split_into_tiers(candidates: list[Page]) -> tuple[list[Page], list[Page]]:
-    """Split ranked candidates into Tier 1 (for categorizer) and Tier 2 pool."""
+def select_tier_1_pages(candidates: list[Page]) -> list[Page]:
+    """Return the top-ranked pages sent to the categorizer."""
     ranked = rank_pages_by_importance(dedupe_pages(candidates))
-    tier_1 = ranked[:TIER_1_SIZE]
-    tier_2_pool = ranked[TIER_1_SIZE:TIER_1_SIZE + TIER_2_CANDIDATES]
-    return tier_1, tier_2_pool
+    return ranked[:TIER_1_SIZE]
 
 
 def select_optional_pages(pages: list[Page], tier_1: list[Page]) -> list[Page]:

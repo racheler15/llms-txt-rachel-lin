@@ -1,5 +1,6 @@
 from bs4 import BeautifulSoup
 
+from constants import COMMON_DOC_PATHS, DOC_PATH_GUESS_THRESHOLD
 from crawler import (
     SitemapBudget,
     _collect_sitemap_priorities,
@@ -8,6 +9,7 @@ from crawler import (
     _nested_sitemaps_to_fetch,
     _parse_sitemap_priorities,
     _prioritize_nested_sitemaps,
+    _seed_crawl_queue,
 )
 from models import Page
 from scoring import calculate_importance_score, should_exclude_crawl_candidate
@@ -309,3 +311,24 @@ def test_fetch_with_retry_recovers_from_timeout():
     assert response is not None
     assert response.status_code == 200
     assert attempts == 2
+
+
+def test_seed_crawl_queue_guesses_doc_paths_when_sitemap_sparse():
+    crawl_queue: dict[str, tuple[float, str, int]] = {}
+    _seed_crawl_queue(crawl_queue, "https://example.com", "example.com", {})
+
+    guessed_urls = {url for _, url, _ in crawl_queue.values()}
+    assert "https://example.com/docs" in guessed_urls
+
+
+def test_seed_crawl_queue_skips_doc_guesses_when_sitemap_is_rich():
+    crawl_queue: dict[str, tuple[float, str, int]] = {}
+    sitemap_priorities = {
+        f"https://example.com/page-{index}": 0.5
+        for index in range(DOC_PATH_GUESS_THRESHOLD)
+    }
+    _seed_crawl_queue(crawl_queue, "https://example.com", "example.com", sitemap_priorities)
+
+    guessed_urls = {url for _, url, _ in crawl_queue.values()}
+    for path in COMMON_DOC_PATHS:
+        assert f"https://example.com{path}" not in guessed_urls

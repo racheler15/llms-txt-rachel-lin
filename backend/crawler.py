@@ -18,8 +18,9 @@ from constants import (
     MAX_SITEMAP_URLS,
     SITEMAP_BULK_MARKERS,
     SITEMAP_PRIORITY_MARKERS,
+    DOC_PATH_GUESS_THRESHOLD,
     SITEMAP_SEED_LIMIT,
-    TIER_2_CANDIDATES,
+    OPTIONAL_CRAWL_RESERVE,
 )
 from models import Page
 from progress import (
@@ -76,7 +77,7 @@ class CrawlResult:
 
 
 MAX_PAGES = 200
-MAIN_CRAWL_BUDGET = MAX_PAGES - TIER_2_CANDIDATES
+MAIN_CRAWL_BUDGET = MAX_PAGES - OPTIONAL_CRAWL_RESERVE
 MAX_CONCURRENCY = 20
 TIMEOUT = 5.0
 MAX_FETCH_RETRIES = 2
@@ -728,16 +729,24 @@ def _seed_crawl_queue(
         allow_excluded=True,
         base_domain=base_domain,
     )
-    # guesses commmon doc paths to queue them earlier --> faster prioritization
-    for path in COMMON_DOC_PATHS:
-        _add_crawl_candidate(
-            crawl_queue,
-            f"{base_url}{path}",
-            1,
-            sitemap_priorities,
-            score_boost=DOC_PATH_BOOST,
-            allow_excluded=True,
-            base_domain=base_domain,
+    # Guess common doc paths only when the sitemap is sparse — avoids wasting
+    # crawl budget on speculative 404s when we already have plenty to fetch.
+    if len(sitemap_priorities) < DOC_PATH_GUESS_THRESHOLD:
+        for path in COMMON_DOC_PATHS:
+            _add_crawl_candidate(
+                crawl_queue,
+                f"{base_url}{path}",
+                1,
+                sitemap_priorities,
+                score_boost=DOC_PATH_BOOST,
+                allow_excluded=True,
+                base_domain=base_domain,
+            )
+    else:
+        logger.info(
+            "Skipping common doc path guesses (%d sitemap URLs >= threshold %d)",
+            len(sitemap_priorities),
+            DOC_PATH_GUESS_THRESHOLD,
         )
     # return top sitemap urls to crawl first
     sitemap_seed_urls = prioritize_sitemap_urls(
@@ -768,7 +777,7 @@ def _optional_reserve_urls(
         base_domain,
         is_internal=is_internal_link,
         should_skip=should_skip_url,
-        limit=TIER_2_CANDIDATES,
+        limit=OPTIONAL_CRAWL_RESERVE,
     )
     if optional_urls:
         return optional_urls

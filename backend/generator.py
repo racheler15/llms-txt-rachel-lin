@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from constants import OPTIONAL_CAP, OPTIONAL_SECTION_NAME
 from models import Page
-from scoring import select_optional_pages, split_into_tiers, matches_optional_pattern
+from scoring import select_optional_pages, select_tier_1_pages, matches_optional_pattern
 from url_utils import dedupe_pages, normalize_url, should_skip_url
 
 load_dotenv()
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 MIN_DESCRIPTION_LENGTH = 20
 MAX_LINKS_PER_SECTION = 15
 MAX_TOTAL_LINKS = 100
-MAX_PAGES_TO_SELECT = 20
+MAX_PAGES_TO_SELECT = 30
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 
@@ -173,16 +173,15 @@ def _categorize_fallback(tier_1: list[Page]) -> dict[str, list[Page]]:
 
 async def categorize_pages(pages: list[Page]) -> dict[str, list[Page]]:
     """
-    Rank pages, categorize Tier 1 via Claude, and append a spec Optional section from Tier 2.
+    Rank pages, categorize Tier 1 via Claude, and append a spec Optional section.
     """
     candidates = _candidate_pages(pages)
-    tier_1, tier_2_pool = split_into_tiers(candidates)
+    tier_1 = select_tier_1_pages(candidates)
     optional_pages = select_optional_pages(candidates, tier_1)
     logger.info(
-        "Optional section: %d pages from %d below-tier-1 optional matches (tier 2 pool size %d)",
+        "Optional section: %d pages from %d below-tier-1 optional matches",
         len(optional_pages),
         sum(1 for p in candidates if matches_optional_pattern(p.url)),
-        len(tier_2_pool),
     )
 
     main_sections = (
