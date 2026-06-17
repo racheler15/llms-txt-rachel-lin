@@ -1,4 +1,4 @@
-# llms.txt Generator
+# Automated llms.txt Generator
 
 Generate spec-compliant [llms.txt](https://llmstxt.org) files from any website URL.
 
@@ -23,7 +23,7 @@ The React frontend connects to the backend over **SSE** (`POST /generate/stream`
 
 For pipeline design choices and tradeoffs, see the [Backend README](./backend/README.md). For UI components and data flow, see the [Frontend README](./frontend/README.md).
 
-## Design rationale
+## Design Rationale
 
 The [spec](https://llmstxt.org) defines llms.txt as a **curated index for on-demand lookup** — fetched at inference time when an agent needs to orient on a site, not a pretraining dump or sitemap replacement.
 
@@ -35,7 +35,7 @@ Output follows the required spec structure: **H1 title**, optional **blockquote 
 
 The optional **narrative section** (freeform text between the blockquote and the H2 lists) is omitted on purpose. The one-line blockquote already orients the reader; a longer “how to interpret these files” paragraph would be either hardcoded boilerplate with little value, or another LLM call per generation — extra cost and latency for something that does not change which pages get surfaced or how accurate the file is.
 
-## Known limitations
+## Known Limitations
 
 - **200-page crawl cap** — large sites are only partially represented; pages are ranked by importance before selection.
 - **No JavaScript rendering** — the crawler reads raw HTML only; SPAs and client-rendered content may return incomplete data.
@@ -43,7 +43,7 @@ The optional **narrative section** (freeform text between the blockquote and the
 
 See [Known Limitations](./backend/README.md#known-limitations) in the backend README for additional edge cases.
 
-## Project Structure
+## Project Layout
 
 ```
 .

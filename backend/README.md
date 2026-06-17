@@ -1,4 +1,4 @@
-# Backend — llms.txt Generator
+# Backend — Automated llms.txt Generator
 
 FastAPI backend that crawls a website and generates a spec-compliant [llms.txt](https://llmstxt.org) file.
 
@@ -11,7 +11,7 @@ FastAPI backend that crawls a website and generates a spec-compliant [llms.txt](
 - [Environment Variables](#environment-variables)
 - [API](#api)
 - [Database](#database)
-- [Project layout](#project-layout)
+- [Project Layout](#project-layout)
 - [Configuration](#configuration)
 - [Known Limitations](#known-limitations)
 
@@ -37,17 +37,21 @@ Generation progress is streamed to the frontend over **SSE** (`POST /generate/st
 
 ## How It Works
 
-The crawler normalizes any input URL to the site root before crawling (e.g. `https://stripe.com/pricing` → `https://stripe.com`). This ensures the generated llms.txt reflects the entire site rather than a single section. The homepage is the highest-signal starting point — nav links from the root point to every major section, which feeds the page importance scorer.
+The pipeline below mirrors the [System Architecture](#system-architecture) diagram — each step maps to a stage in `run_scan()` / generation.
 
-### Site scope — `base_domain`
+### 1. Input URL & Normalize
 
-Every crawl derives a **registrable domain** from the input URL (e.g. `stripe.com` from `https://docs.stripe.com/api`). This answers: *what counts as the same site?*
+Any input URL is normalized to the site root before crawling (e.g. `https://stripe.com/pricing` → `https://stripe.com`). This ensures the generated llms.txt reflects the entire site rather than a single section. The homepage is the highest-signal starting point — nav links from the root point to every major section, which feeds the page importance scorer.
 
-- Computed by `registrable_domain()` in `url_utils.py` using `tldextract` (public suffix list).
-- Used by `is_internal_link()` so subdomains (`docs.stripe.com`, `blog.stripe.com`) are treated as internal.
-- **Tradeoff:** relies on the public suffix list. Edge cases on private suffixes or unusual hostnames may misclassify links (see [Known Limitations](#known-limitations)).
+**Site scope — `base_domain`:** Every crawl derives a **registrable domain** from the input URL (e.g. `stripe.com` from `https://docs.stripe.com/api`). Computed by `registrable_domain()` in `url_utils.py` using `tldextract`; used by `is_internal_link()` so subdomains (`docs.stripe.com`, `blog.stripe.com`) are treated as internal. **Tradeoff:** relies on the public suffix list — see [Known Limitations](#known-limitations) for edge cases.
 
-### Sitemap discovery
+### 2. Fetch robots.txt
+
+The crawler fetches `/robots.txt` before crawling and honors `Disallow` / `Allow` rules via `can_fetch` when the file loads successfully. It also probes homepage reachability at this stage.
+
+If robots.txt is missing, returns an error, or times out, we use a **fail-open** policy: assume crawling is allowed. This is standard for small crawlers — a missing robots.txt (404) is extremely common, and blocking the whole job would break most sites. When rules are available, we respect them. A fully blocked robots.txt or homepage timeout aborts the scan.
+
+### 3. Discover Sitemaps
 
 Sitemaps are the primary URL source when available. Discovery follows this order:
 
@@ -61,9 +65,9 @@ Sitemaps are the primary URL source when available. Discovery follows this order
 
 Nested sitemap indexes are followed recursively (depth and count capped). Bulk sitemaps (video/model indexes) are deprioritized or skipped to protect the 200-page crawl budget. Optional-pattern URLs (`/privacy`, `/terms`, …) are guessed in the post-crawl reserve only when the sitemap did not surface them.
 
-### Crawl strategy
+### 4. Priority Crawl
 
-After [sitemap discovery](#sitemap-discovery) seeds the queue (homepage, sitemap URLs, and conditional doc-path guesses), the crawler:
+After sitemap discovery seeds the queue (homepage, sitemap URLs, and conditional doc-path guesses), the crawler:
 
 1. **Priority queue** — fetch pages in score order (importance, then depth, then URL).
 2. **BFS link discovery** — follow internal links from each fetched page up to `MAX_DEPTH` (default 3).
@@ -71,19 +75,25 @@ After [sitemap discovery](#sitemap-discovery) seeds the queue (homepage, sitemap
 4. **Budget** — stop at `MAX_PAGES` (default 200): 185 main crawl + 15 optional reserve.
 5. **HTTP resilience** — retry **429** (exponential backoff: 1s, 2s) and timeouts (1s) up to `MAX_FETCH_RETRIES` (default 2); skip the page and continue after that.
 
-See [Rate limiting](#rate-limiting) for the retry flow.
+**Deduplication:** URLs are normalized (lowercased host, stripped trailing slashes, removed UTM params) and hashed to avoid revisiting the same page via different links. Page body text is hashed so duplicate content at different URLs can be detected downstream.
 
-### Page selection (llms.txt pipeline)
+See [Rate Limiting](#rate-limiting) for the retry flowchart.
 
-Pages are pre-filtered using a deterministic importance score (inbound link count, sitemap priority, nav placement, path depth, metadata quality) before categorization. This keeps the categorization prompt focused on the most relevant pages, reduces API cost, and ensures consistent results across runs.
+### 5. AI Readiness Score
 
-1. **Pre-filter** — hard-skip patterns drop auth, search, asset, and noisy query-param URLs.
-2. **Crawl** — up to 200 pages (185 main + 15 optional reserve for legal/press/blog paths).
-3. **Top 100** — sent to Claude Haiku; model picks **30** most useful pages and groups them into 4–6 site-specific `##` sections.
-4. **Optional** — any crawled page outside the top 100 whose URL matches optional patterns (legal, press, careers, blog); up to **8** populate `## Optional`.
-5. **Omitted** — remaining pages are intentionally excluded. llms.txt represents the most important parts of a site, not an exhaustive index.
+After the crawl, `compute_readiness()` in `readiness.py` scores the site across five dimensions: existing llms.txt, AI bot access (robots.txt), structured data on the homepage, content clarity (meta descriptions, word count), and site structure (sitemap, HTTP errors). The total score and top recommendations are returned to the frontend analysis page.
 
-### Approaches considered
+### 6. Save Scan to SQLite
+
+Crawl results, page hashes, and readiness JSON are persisted via `save_scan()` in `db.py`. See [Database](#database) for schema and change-detection details.
+
+### 7. Rank Pages by Importance
+
+Before categorization, pages are pre-filtered and ranked with a deterministic importance score (inbound link count, sitemap priority, nav placement, path depth, metadata quality). Hard-skip patterns drop auth, search, asset, and noisy query-param URLs.
+
+### 8. Claude Haiku Categorizes Top 100
+
+The top 100 ranked candidates are sent to **Claude Haiku** (`claude-haiku-4-5-20251001`). The model picks **30** most useful pages and groups them into 4–6 site-specific `##` sections. Without an API key, a deterministic fallback groups the top 30 under a single `Main` section.
 
 | Approach | Problem |
 |----------|---------|
@@ -92,20 +102,17 @@ Pages are pre-filtered using a deterministic importance score (inbound link coun
 | Two-pass LLM (pick top N, then group) | Two API calls; slower, less deterministic, still unreliable |
 | **Chosen: code scores → LLM categorizes top tier** | More deterministic, faster, cheaper; LLM only does grouping and naming |
 
-The chosen approach uses a single **Claude Haiku** call for categorization (plus an optional second call for site description when meta tags are missing). Without an API key, a deterministic fallback groups the top 30 pages under a single `Main` section.
+An optional second Claude call generates a one-sentence site description when homepage meta tags are missing.
 
-### Deduplication
+### 9. Add Optional Section
 
-- **URL dedup:** URLs are normalized (lowercased host, stripped trailing slashes, removed UTM params) and hashed to avoid revisiting the same page via different links.
-- **Content dedup:** Page body text is hashed so duplicate content served at different URLs can be detected downstream.
+Any crawled page **outside the top 100** whose URL matches optional patterns (legal, press, careers, blog) can populate `## Optional`, capped at **8** links. Pages already used in main sections are excluded.
 
-### Robots.txt
+### 10. Assemble llms.txt
 
-The crawler fetches `/robots.txt` before crawling and honors `Disallow` / `Allow` rules via `can_fetch` when the file loads successfully.
+`generate_llms_txt()` assembles the spec-compliant output: **H1 title**, optional **blockquote** summary, then **H2 file lists** (plus `## Optional` when applicable). Remaining crawled pages are intentionally omitted — up to **100 links** total across all sections. llms.txt represents the most important parts of a site, not an exhaustive index.
 
-If robots.txt is missing, returns an error, or times out, we use a **fail-open** policy: assume crawling is allowed. This is standard for small crawlers — a missing robots.txt (404) is extremely common, and blocking the whole job would break most sites. When rules are available, we respect them.
-
-### Rate limiting
+### Rate Limiting
 
 Each HTTP fetch uses `_fetch_with_retry()` in `crawler.py`. On **429 Too Many Requests**, the crawler waits `2^attempt` seconds (1s, then 2s) and retries up to `MAX_FETCH_RETRIES` (default 2). Timeouts get a 1s pause between attempts. After retries are exhausted, that page is skipped and the crawl continues — the job does not fail outright.
 
@@ -274,7 +281,7 @@ Same as `POST /generate`, but streams progress as Server-Sent Events. Used by th
 
 After each successful generate, scan results are persisted to SQLite. See [Database](#database) for schema and change-detection details.
 
-### Background scheduler
+### Background Scheduler
 
 On startup, a background task re-crawls due domains every 24 hours. When content changes, it auto-regenerates llms.txt and sets `has_unviewed_changes` until the user opens the analysis page.
 
@@ -315,20 +322,20 @@ Two tables split **summary state** from **per-page detail**:
 
 **Relationship:** one domain → many pages. `FOREIGN KEY (domain_id) REFERENCES domains(id) ON DELETE CASCADE`. `UNIQUE(domain_id, url)` prevents duplicate page rows.
 
-### Why two tables
+### Why Two Tables
 
 `domains` holds the current summary and is updated on every rescan. `pages` must be queried and compared independently — e.g. current crawled hashes vs the generation baseline. Storing everything in one row would make that awkward and grow unbounded.
 
 On `save_scan()`, old `pages` rows for the domain are deleted and replaced with fresh crawl data. The domain row’s readiness and crawl counts are updated; `llms_txt` and `generation_hashes_json` are left unchanged until generation runs again.
 
-### Change detection
+### Change Detection
 
 1. **`finalize_generation()`** — after llms.txt is generated, copies current page hashes into `generation_hashes_json` and clears `has_unviewed_changes`.
 2. **Next crawl** — `save_scan()` refreshes `pages` with new hashes.
 3. **`detect_changes()`** — compares current `pages` hashes to `generation_hashes_json`. If URLs or hashes differ, content changed since the last generation.
 4. **Scheduler / badge** — on change, `has_unviewed_changes` is set (scheduler auto-regenerates llms.txt when a prior file exists). Opening the analysis page calls `mark_viewed()` to clear the badge.
 
-## Project layout
+## Project Layout
 
 ```
 backend/
@@ -351,7 +358,7 @@ backend/
 
 Defaults are tuned for fast, predictable demo runs during the take-home. Limits live as constants in the files below — raising them scales the pipeline without changing its logic, at the cost of slower crawls and higher LLM usage.
 
-### `constants.py` — shared limits
+### `constants.py` — Shared Limits
 
 | Constant | Default | Description |
 |----------|---------|-------------|
@@ -365,7 +372,7 @@ Defaults are tuned for fast, predictable demo runs during the take-home. Limits 
 | `MAX_NESTED_SITEMAPS` | 8 | Max child sitemap documents fetched |
 | `MAX_SITEMAP_DEPTH` | 3 | Max sitemap index nesting depth |
 
-### `crawler.py` — HTTP crawl tuning
+### `crawler.py` — HTTP Crawl Tuning
 
 | Constant | Default | Description |
 |----------|---------|-------------|
@@ -374,7 +381,7 @@ Defaults are tuned for fast, predictable demo runs during the take-home. Limits 
 | `TIMEOUT` | 5s | HTTP request timeout |
 | `MAX_FETCH_RETRIES` | 2 | Retries for 429 and timeout errors before skipping a page |
 
-### `generator.py` — llms.txt output limits
+### `generator.py` — llms.txt Output Limits
 
 | Constant | Default | Description |
 |----------|---------|-------------|
