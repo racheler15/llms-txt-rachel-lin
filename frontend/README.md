@@ -10,13 +10,13 @@ React UI for generating spec-compliant [llms.txt](https://llmstxt.org) files fro
 - Carbon Icons — UI icons
 
 ## Screenshots
-Home page
+### Home page
 <img width="800" alt="image" src="https://github.com/user-attachments/assets/757d868a-c2b0-47b0-bcd8-be9ac49a9c9b" />
 
-Analysis page
-<img width="260" alt="image" src="https://github.com/user-attachments/assets/b6c86616-10c9-4ee6-89b8-eee4ca25a8a2" />
-<img width="260" alt="image" src="https://github.com/user-attachments/assets/1a23dfcc-5ac6-41fd-9279-016f003d9de1" />
-<img width="260" alt="image" src="https://github.com/user-attachments/assets/15e32573-41a1-4521-9932-55043d60d3d0" />
+### Analysis page
+<img width="320" alt="image" src="https://github.com/user-attachments/assets/b6c86616-10c9-4ee6-89b8-eee4ca25a8a2" />
+<img width="320" alt="image" src="https://github.com/user-attachments/assets/1a23dfcc-5ac6-41fd-9279-016f003d9de1" />
+<img width="320" alt="image" src="https://github.com/user-attachments/assets/15e32573-41a1-4521-9932-55043d60d3d0" />
 
 ## Routes
 
