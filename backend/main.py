@@ -1,6 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
+import asyncio
+import json
 import logging
 from urllib.parse import urlparse
 
@@ -100,6 +103,33 @@ def _to_recrawl_response(stored: dict, *, content_changed: bool, regenerated: bo
     )
 
 
+def _sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _run_generate_pipeline(
+    url: str,
+    on_progress,
+) -> GenerateResponse:
+    scan = await run_scan(url, on_progress=on_progress)
+    pages = scan.crawl.pages
+    llms_txt, pages_included = await build_llms_txt(pages, on_progress=on_progress)
+    hostname = urlparse(url).hostname or ""
+    domain = display_domain(hostname)
+
+    finalize_generation(domain, llms_txt=llms_txt, pages_included=pages_included)
+
+    return GenerateResponse(
+        llms_txt=llms_txt,
+        domain=domain,
+        pages_crawled=len(pages),
+        pages_included=pages_included,
+        readiness=_to_readiness_response(scan.readiness),
+        has_content_changes=False,
+        has_unviewed_changes=False,
+    )
+
+
 @app.get("/scans", response_model=list[ScanSummaryResponse])
 async def list_scans():
     return [ScanSummaryResponse(**scan) for scan in list_recent_scans()]
@@ -160,23 +190,44 @@ async def refresh_scan(domain: str):
 @app.post("/generate", response_model=GenerateResponse)
 async def generate(request: CrawlRequest):
     try:
-        scan = await run_scan(str(request.url))
+        return await _run_generate_pipeline(str(request.url), on_progress=None)
     except ScanError as exc:
         _raise_scan_error(exc)
 
-    pages = scan.crawl.pages
-    llms_txt, pages_included = await build_llms_txt(pages)
-    hostname = urlparse(str(request.url)).hostname or ""
-    domain = display_domain(hostname)
 
-    finalize_generation(domain, llms_txt=llms_txt, pages_included=pages_included)
+@app.post("/generate/stream")
+async def generate_stream(request: CrawlRequest):
+    async def event_generator():
+        queue: asyncio.Queue[tuple[str, dict] | None] = asyncio.Queue()
 
-    return GenerateResponse(
-        llms_txt=llms_txt,
-        domain=domain,
-        pages_crawled=len(pages),
-        pages_included=pages_included,
-        readiness=_to_readiness_response(scan.readiness),
-        has_content_changes=False,
-        has_unviewed_changes=False,
+        def on_progress(event: str, data: dict) -> None:
+            queue.put_nowait((event, data))
+
+        async def run_pipeline() -> None:
+            try:
+                result = await _run_generate_pipeline(str(request.url), on_progress=on_progress)
+                await queue.put(("complete", result.model_dump()))
+            except ScanError as exc:
+                await queue.put(("error", error_detail(exc)))
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(run_pipeline())
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            event, data = item
+            yield _sse_event(event, data)
+
+        await task
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )

@@ -7,6 +7,7 @@ from changes import detect_changes
 from crawl_errors import ScanError, ScanErrorType
 from crawler import CrawlResult, crawl_site
 from db import get_domain_id, load_generation_hashes, page_hash_map, save_scan
+from progress import STAGE_ANALYZING_READINESS, ProgressCallback, emit_stage
 from readiness import ReadinessResult, compute_readiness
 from url_utils import display_domain
 
@@ -28,11 +29,17 @@ def _check_crawl(crawl: CrawlResult) -> None:
         raise ScanError(ScanErrorType.NO_PAGES)
 
 
-async def run_scan(url: str, *, persist: bool = True) -> ScanResult:
+async def run_scan(
+    url: str,
+    *,
+    persist: bool = True,
+    on_progress: ProgressCallback = None,
+) -> ScanResult:
     async with httpx.AsyncClient() as client:
-        crawl = await crawl_site(url, client=client)
+        crawl = await crawl_site(url, client=client, on_progress=on_progress)
 
     _check_crawl(crawl)
+    emit_stage(on_progress, STAGE_ANALYZING_READINESS)
     readiness = compute_readiness(crawl)
 
     has_content_changes = False

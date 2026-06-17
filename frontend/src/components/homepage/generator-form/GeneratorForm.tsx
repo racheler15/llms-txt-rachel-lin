@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { useGenerate } from '../../../hooks/useGenerate'
 import { recentScansQueryKey } from '../../../hooks/useRecentScans'
 import { useSeedScanCache } from '../../../hooks/useScan'
+import GenerationSteps from './GenerationSteps'
 import './GeneratorForm.css'
 
 function GeneratorForm() {
@@ -11,7 +12,7 @@ function GeneratorForm() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const seedScanCache = useSeedScanCache()
-  const { mutateAsync, isPending, isError, error } = useGenerate()
+  const { mutateAsync, isPending, isError, error, progress } = useGenerate()
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -48,6 +49,8 @@ function GeneratorForm() {
           {isPending ? 'Generating...' : 'Generate'}
         </button>
       </form>
+
+      {isPending && progress && <GenerationSteps progress={progress} />}
 
       {isError && <p className="generator-error">{error?.message ?? 'Something went wrong. Please try again.'}</p>}
     </section>

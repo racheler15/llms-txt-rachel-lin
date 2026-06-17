@@ -17,6 +17,14 @@ from constants import (
     TIER_2_CANDIDATES,
 )
 from models import Page
+from progress import (
+    STAGE_CHECKING_ACCESS,
+    STAGE_CRAWLING,
+    STAGE_DISCOVERING_PAGES,
+    ProgressCallback,
+    emit_progress,
+    emit_stage,
+)
 from scoring import (
     precrawl_url_score,
     top_optional_sitemap_urls,
@@ -676,6 +684,8 @@ async def _fetch_optional_pages(
 async def crawl_site(
     start_url: str,
     client: httpx.AsyncClient | None = None,
+    *,
+    on_progress: ProgressCallback = None,
 ) -> CrawlResult:
     """
     Crawl a site given a start_url to generate an llms.txt that reflects the entire website's structure.
@@ -696,6 +706,7 @@ async def crawl_site(
         nonlocal sitemap_exists
         homepage_signals: HomepageSignals | None = None
         fetch_stats = CrawlFetchStats()
+        emit_stage(on_progress, STAGE_CHECKING_ACCESS)
         robots, robots_sitemaps, robots_text, robots_status = await _load_robots(
             active_client, base_url
         )
@@ -717,6 +728,7 @@ async def crawl_site(
                 robots_blocked=robots_blocked,
                 homepage_timed_out=homepage_timed_out,
             )
+        emit_stage(on_progress, STAGE_DISCOVERING_PAGES)
         sitemap_candidates = _sitemap_candidate_urls(base_url, robots_sitemaps)
         if robots_sitemaps:
             logger.info("robots.txt declared %d sitemap(s): %s", len(robots_sitemaps), robots_sitemaps)
@@ -725,7 +737,9 @@ async def crawl_site(
         )
         logger.info("Sitemap found: %d URLs", len(sitemap_priorities))
 
+        emit_stage(on_progress, STAGE_CRAWLING)
         crawl_queue: dict[str, tuple[float, str, int]] = {}
+        last_reported_pages = 0
         inbound_counts: dict[str, int] = {}
 
         # initialize seed crawl queue with more important pages first from official sitemaps
@@ -796,6 +810,11 @@ async def crawl_site(
                             sitemap_priorities,
                             base_domain=base_domain,
                         )
+
+            if on_progress and len(pages) - last_reported_pages >= 5:
+                emit_progress(on_progress, STAGE_CRAWLING, pages_crawled=len(pages))
+                last_reported_pages = len(pages)
+
         # fetch optional sitemap pages to fill remaining budget after main crawl
         optional_pages = await _fetch_optional_pages(
             client=active_client,
@@ -810,6 +829,9 @@ async def crawl_site(
         )
         for page in optional_pages:
             _store_crawled_page(page, [], pages, page_index_by_url, inbound_counts)
+
+        if on_progress and len(pages) != last_reported_pages:
+            emit_progress(on_progress, STAGE_CRAWLING, pages_crawled=len(pages))
 
         llms_txt_exists = await _check_llms_txt(active_client, base_url)
 

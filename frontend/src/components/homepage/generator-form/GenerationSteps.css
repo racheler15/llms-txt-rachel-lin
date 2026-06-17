@@ -1,0 +1,74 @@
+.generation-steps {
+  list-style: none;
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.generation-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  font-size: 0.9375rem;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.generation-step--active {
+  color: #111;
+  font-weight: 500;
+}
+
+.generation-step--active .generation-step-icon {
+  color: #5b7fd6;
+  animation: generation-step-pulse 1.5s ease-in-out infinite;
+}
+
+.generation-step--complete {
+  color: #374151;
+}
+
+.generation-step--complete .generation-step-icon {
+  color: #16a34a;
+}
+
+.generation-step--pending .generation-step-icon {
+  color: #d1d5db;
+}
+
+.generation-step-label {
+  padding-top: 0.0625rem;
+}
+
+.generation-step-detail {
+  font-weight: 400;
+  color: #6b7280;
+}
+
+@keyframes generation-step-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (max-width: 640px) {
+  .generation-steps {
+    margin-top: 1.25rem;
+    padding: 0.875rem 1rem;
+    gap: 0.625rem;
+  }
+
+  .generation-step {
+    font-size: 0.875rem;
+  }
+}

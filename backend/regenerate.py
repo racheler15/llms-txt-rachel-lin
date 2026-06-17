@@ -11,6 +11,7 @@ from db import (
     set_unviewed_changes,
 )
 from generator import categorize_pages, generate_llms_txt
+from progress import STAGE_GENERATING, ProgressCallback, emit_stage
 from scan import run_scan
 
 
@@ -20,7 +21,8 @@ class RecrawlResult:
     regenerated: bool
 
 
-async def build_llms_txt(pages) -> tuple[str, int]:
+async def build_llms_txt(pages, *, on_progress: ProgressCallback = None) -> tuple[str, int]:
+    emit_stage(on_progress, STAGE_GENERATING)
     categorized = await categorize_pages(pages)
     return await generate_llms_txt(pages, categorized)
 
