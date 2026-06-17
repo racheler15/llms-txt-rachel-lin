@@ -11,7 +11,7 @@ Take-home implementation built for **site owners and marketing teams** who want 
 ## Usage
 
 1. Enter any site URL on the homepage (e.g. `https://stripe.com`).
-2. Watch generation progress: access check → sitemap discovery → crawl → readiness analysis → generate.
+2. Watch generation progress: access check → discovering links → crawl → readiness analysis → generate.
 3. Review the analysis page: AI readiness score, category breakdown, and the generated llms.txt.
 4. Copy or download the file. Revisit past scans from the recent scans list on the homepage.
 
@@ -39,6 +39,8 @@ The optional **narrative section** (freeform text between the blockquote and the
 
 - **200-page crawl cap** — large sites are only partially represented; pages are ranked by importance before selection.
 - **No JavaScript rendering** — the crawler reads raw HTML only; SPAs and client-rendered content may return incomplete data.
+- **Large template-heavy sites** — marketplaces and similar sites can have thousands of near-duplicate SEO landing pages that dominate sitemaps and the crawl budget; output may include a few arbitrary listing pages rather than a curated subset.
+- **Single-pass categorization** — Claude picks pages and invents section names in one call with no post-validation; listing pages that reach tier 1 may land in vague catch-all sections instead of being dropped or routed to Optional.
 - **Claude improves section quality** — without an API key, a deterministic fallback still works but produces less nuanced groupings.
 
 See [Known Limitations](./backend/README.md#known-limitations) in the backend README for additional edge cases.

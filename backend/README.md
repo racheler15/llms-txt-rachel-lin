@@ -17,13 +17,15 @@ FastAPI backend that crawls a website and generates a spec-compliant [llms.txt](
 
 ## System Architecture
 
-![System architecture](../docs/architecture.png)
+See [System Architecture](../README.md#architecture) in the main README for the full end-to-end diagram (frontend, backend modules, SQLite, output).
+
+**Pipeline flow** (backend stages):
 
 ```mermaid
 flowchart TD
   input[Input URL] --> normalize[Normalize to scheme://hostname]
   normalize --> robots[Fetch robots.txt]
-  robots --> sitemap[Discover sitemaps]
+  robots --> sitemap[Discovering links]
   sitemap --> crawl[Priority crawl max 200 pages — 429/timeout retry]
   crawl --> readiness[AI readiness score]
   readiness --> persist[Save scan to SQLite]
@@ -41,7 +43,7 @@ The pipeline below mirrors the [System Architecture](#system-architecture) diagr
 
 ### 1. Input URL & Normalize
 
-Any input URL is normalized to the site root before crawling (e.g. `https://stripe.com/pricing` → `https://stripe.com`). This ensures the generated llms.txt reflects the entire site rather than a single section. The homepage is the highest-signal starting point — nav links from the root point to every major section, which feeds the page importance scorer.
+Any input URL is validated as `HttpUrl` via Pydantic (`CrawlRequest`) on `POST /generate` before the crawl starts; invalid URLs return 422. The crawler then normalizes the URL to the site root (e.g. `https://stripe.com/pricing` → `https://stripe.com`) so the generated llms.txt reflects the entire site, not a single section.
 
 **Site scope — `base_domain`:** Every crawl derives a **registrable domain** from the input URL (e.g. `stripe.com` from `https://docs.stripe.com/api`). Computed by `registrable_domain()` in `url_utils.py` using `tldextract`; used by `is_internal_link()` so subdomains (`docs.stripe.com`, `blog.stripe.com`) are treated as internal. **Tradeoff:** relies on the public suffix list — see [Known Limitations](#known-limitations) for edge cases.
 
@@ -51,23 +53,25 @@ The crawler fetches `/robots.txt` before crawling and honors `Disallow` / `Allow
 
 If robots.txt is missing, returns an error, or times out, we use a **fail-open** policy: assume crawling is allowed. This is standard for small crawlers — a missing robots.txt (404) is extremely common, and blocking the whole job would break most sites. When rules are available, we respect them. A fully blocked robots.txt or homepage timeout aborts the scan.
 
-### 3. Discover Sitemaps
+### 3. Discovering Links
 
-Sitemaps are the primary URL source when available. Discovery follows this order:
+Sitemaps are the primary URL source when available — they’re the site owner’s curated list of important pages, so we start there instead of relying on link-following alone.
+
+Discovery follows this order:
 
 | Step | Behavior | Why |
 |------|----------|-----|
-| 1 | Read `Sitemap:` lines from `robots.txt` | Crawl rules and sitemap locations in one file. Many sites use non-default paths (`/docs/sitemap.xml`, CDN URLs). |
-| 2 | Fallback to `/sitemap.xml` and `/sitemap_index.xml` | Large sites often use `sitemap_index.xml` (a sitemap of sitemaps) instead of a single file. |
-| 3 | Merge priorities across sitemaps | Same URL in multiple sitemaps → keep the **higher** `<priority>` value (`_merge_sitemap_priorities` in `crawler.py`). |
+| 1 | Official sitemaps from `robots.txt` | If `robots.txt` declares `Sitemap:` URLs, use those — the site’s canonical locations (often non-default paths like `/docs/sitemap.xml` or CDN URLs). |
+| 2 | Conventional path fallback | If robots lists **no** sitemaps, try `/sitemap.xml` and `/sitemap_index.xml` — the standard names most sites use. |
+| 3 | Merge priorities across sitemaps | Same page URL in multiple sitemaps → keep the **higher** `<priority>` value (`_merge_sitemap_priorities` in `crawler.py`). |
 | 4 | Seed crawl queue | Top 150 sitemap URLs by pre-crawl score enter the priority queue; BFS link discovery fills gaps. |
-| 5 | Guess common doc paths | Only when the sitemap has **fewer than 20 URLs** — seed paths like `/docs` and `/getting-started` so doc-heavy sites without a sitemap still get covered. Skipped when the sitemap is already rich to avoid wasting crawl budget on speculative 404s. |
+| 5 | Guess common doc paths | Only when the merged sitemap has **fewer than 20 URLs** — seed paths like `/docs` and `/getting-started`. Skipped when the sitemap is already rich to avoid wasting crawl budget on speculative 404s. |
 
-Nested sitemap indexes are followed recursively (depth and count capped). Bulk sitemaps (video/model indexes) are deprioritized or skipped to protect the 200-page crawl budget. Optional-pattern URLs (`/privacy`, `/terms`, …) are guessed in the post-crawl reserve only when the sitemap did not surface them.
+Nested sitemap indexes recurse (depth and count capped). Parse stops at **5,000** page URLs (`MAX_SITEMAP_URLS`) after filtering junk (i.e. hard-skip paths, locale variants, depth > 4, nested blog/news) so the cap favors useful pages; only the top **150** seed the queue. Bulk indexes (video/model) are skipped or deprioritized to protect the 200-page budget. Optional paths (`/privacy`, `/terms`, …) are guessed post-crawl only if the sitemap missed them.
 
 ### 4. Priority Crawl
 
-After sitemap discovery seeds the queue (homepage, sitemap URLs, and conditional doc-path guesses), the crawler:
+Link discovery seeds the queue (homepage, sitemap URLs, and conditional doc-path guesses). The crawler then:
 
 1. **Priority queue** — fetch pages in score order (importance, then depth, then URL).
 2. **BFS link discovery** — follow internal links from each fetched page up to `MAX_DEPTH` (default 3).
@@ -369,6 +373,7 @@ Defaults are tuned for fast, predictable demo runs during the take-home. Limits 
 | `SITEMAP_SEED_LIMIT` | 150 | Max sitemap URLs seeded into the crawl queue |
 | `DOC_PATH_GUESS_THRESHOLD` | 20 | Guess common doc paths only when merged sitemap URL count is below this |
 | `MAX_SITEMAP_URLS` | 5,000 | Max page URLs parsed from sitemaps |
+| `MAX_SITEMAP_PATH_SEGMENTS` | 4 | Skip deeper paths during sitemap parse |
 | `MAX_NESTED_SITEMAPS` | 8 | Max child sitemap documents fetched |
 | `MAX_SITEMAP_DEPTH` | 3 | Max sitemap index nesting depth |
 
@@ -394,4 +399,6 @@ Defaults are tuned for fast, predictable demo runs during the take-home. Limits 
 
 - **Registrable-domain matching uses `tldextract`** (public suffix list). Edge cases on private suffixes or unusual hostnames may still misclassify internal links.
 - **Page budget is capped at 200.** Large sites will only have a subset represented. Pages are ranked by importance score before selection.
-- **JavaScript-rendered content is not supported.** The crawler fetches raw HTML only. Single-page apps or sites that load content dynamically via JavaScript will return empty or incomplete data.
+- **Large template-heavy sites.** Sites with thousands of near-duplicate SEO landing pages (e.g. city or listing URLs sharing the same path pattern) can flood sitemaps and the crawl budget. The crawler ranks by structural signals (depth, inbound links, sitemap priority) but does not cap high-cardinality URL templates, so a few arbitrary listing pages may appear in output on marketplaces.
+- **Single-pass categorization.** Claude picks pages and invents section names in one call with no post-validation; listing pages that reach tier 1 may land in vague catch-all sections instead of being dropped or routed to Optional.
+- **JavaScript-rendered content is not supported.** The crawler fetches raw HTML only. Single-page apps or sites that load content dynamically via JavaScript will return empty or incomplete data. The analysis UI sets `readiness.js_rendering_likely` when crawled pages look like empty shells.
