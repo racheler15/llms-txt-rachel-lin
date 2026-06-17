@@ -2,6 +2,19 @@
 
 FastAPI backend that crawls a website and generates a spec-compliant [llms.txt](https://llmstxt.org) file.
 
+## Contents
+
+- [System Architecture](#system-architecture)
+- [How It Works](#how-it-works)
+- [Setup](#setup)
+- [Running](#running)
+- [Environment Variables](#environment-variables)
+- [API](#api)
+- [Database](#database)
+- [Project layout](#project-layout)
+- [Configuration](#configuration)
+- [Known Limitations](#known-limitations)
+
 ## System Architecture
 
 ![System architecture](../docs/architecture.png)

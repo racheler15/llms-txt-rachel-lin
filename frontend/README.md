@@ -2,6 +2,18 @@
 
 React UI for generating spec-compliant [llms.txt](https://llmstxt.org) files from any website URL.
 
+## Contents
+
+- [Stack](#stack)
+- [Screenshots](#screenshots)
+- [Routes](#routes)
+- [Components](#components)
+- [Data Flow](#data-flow)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Environment Variables](#environment-variables)
+- [Scripts](#scripts)
+
 ## Stack
 
 - React 19, TypeScript, Vite
