@@ -16,6 +16,29 @@ React UI for generating spec-compliant [llms.txt](https://llmstxt.org) files fro
 | `/` | Home | URL input form and recent scans |
 | `/analysis/:domain` | Analysis | Readiness score, category breakdown, llms.txt output |
 
+## Components
+
+| Component | Path | Role |
+|-----------|------|------|
+| `GeneratorForm` | `components/homepage/generator-form/` | URL input, submit, error display; triggers generation |
+| `GenerationSteps` | `components/homepage/generator-form/` | Live step checklist during SSE progress |
+| `RecentScans` | `components/homepage/recent-scans/` | Lists persisted scans from `GET /scans`; links to analysis |
+| `AnalysisOverview` + `StatCards` | `components/analysis/analysis-overview/` | Domain header, page counts, readiness summary, rescan action |
+| `ReadinessScore` | `components/analysis/readiness-score/` | Category score bars and recommendations |
+| `CategoriesBreakdown` | `components/analysis/categories-breakdown/` | Expandable llms.txt section/page list |
+| `GeneratedOutput` | `components/analysis/generated-output/` | Preview, copy, and download llms.txt |
+
+## Data Flow
+
+1. User submits a URL in `GeneratorForm`.
+2. `useGenerate` POSTs to `/generate/stream` and parses SSE events via `readSseStream`.
+3. Progress events update `GenerationSteps` (`checking_access` → `discovering_pages` → `crawling` → `analyzing_readiness` → `generating`).
+4. On `complete`, the response is mapped to `AnalysisData`, seeded into the React Query cache, and the app navigates to `/analysis/:domain`.
+5. `Analysis` loads scan data with `useScan`, calls `useMarkViewed` on mount, and renders the overview, readiness, categories, and output panels.
+6. User can rescan from the analysis page via `useRecrawl`.
+
+Key files: `hooks/useGenerate.ts`, `lib/readSseStream.ts`, `types/generation.ts`, `types/analysis.ts`.
+
 ## Project Structure
 
 ```
@@ -35,14 +58,17 @@ src/
 │       ├── generated-output/
 │       └── readiness-score/
 ├── hooks/
-│   ├── useGenerate.ts    # POST /generate
+│   ├── useGenerate.ts    # POST /generate/stream (SSE)
 │   ├── useScan.ts        # GET /scans/{domain}
 │   ├── useRecentScans.ts # GET /scans
 │   ├── useRecrawl.ts     # POST /scans/{domain}/recrawl
 │   ├── useMarkViewed.ts  # POST /scans/{domain}/mark-viewed
 │   └── useDownload.ts
+├── lib/
+│   └── readSseStream.ts  # SSE frame parser
 └── types/
-    └── analysis.ts       # API response mappers
+    ├── analysis.ts       # API response mappers
+    └── generation.ts     # Progress step IDs
 ```
 
 ## Getting Started

@@ -2,23 +2,85 @@
 
 FastAPI backend that crawls a website and generates a spec-compliant [llms.txt](https://llmstxt.org) file.
 
+## System Architecture
+
+![System architecture](../docs/architecture.png)
+
+```mermaid
+flowchart TD
+  input[Input URL] --> normalize[Normalize to scheme://hostname]
+  normalize --> robots[Fetch robots.txt]
+  robots --> sitemap[Discover sitemaps]
+  sitemap --> crawl[Priority crawl max 200 pages]
+  crawl --> readiness[AI readiness score]
+  readiness --> persist[Save scan to SQLite]
+  persist --> tier[Rank and split tiers]
+  tier --> claude[Claude Haiku categorizes Tier 1]
+  claude --> optional[Add Optional section]
+  optional --> output[Assemble llms.txt]
+```
+
+Generation progress is streamed to the frontend over **SSE** (`POST /generate/stream`) — stage changes and crawl counts arrive in real time while the pipeline runs. Page categorization uses **Claude Haiku** (`claude-haiku-4-5-20251001`): fast and cheap enough for per-request generation, with a deterministic fallback when no API key is set.
+
 ## How It Works
 
 The crawler normalizes any input URL to the site root before crawling (e.g. `https://stripe.com/pricing` → `https://stripe.com`). This ensures the generated llms.txt reflects the entire site rather than a single section. The homepage is the highest-signal starting point — nav links from the root point to every major section, which feeds the page importance scorer.
 
-If a sitemap exists (via `robots.txt` `Sitemap:` directives, `/sitemap.xml`, or `/sitemap_index.xml`) it's used as the primary URL source; nested sitemap indexes are followed recursively. Otherwise the crawler falls back to BFS from the homepage.
+### Site scope — `base_domain`
 
-### Crawl Strategy
+Every crawl derives a **registrable domain** from the input URL (e.g. `stripe.com` from `https://docs.stripe.com/api`). This answers: *what counts as the same site?*
+
+- Computed by `registrable_domain()` in `url_utils.py` using `tldextract` (public suffix list).
+- Used by `is_internal_link()` so subdomains (`docs.stripe.com`, `blog.stripe.com`) are treated as internal.
+- **Tradeoff:** relies on the public suffix list. Edge cases on private suffixes or unusual hostnames may misclassify links (see [Known Limitations](#known-limitations)).
+
+### Sitemap discovery
+
+Sitemaps are the primary URL source when available. Discovery follows this order:
+
+| Step | Behavior | Why |
+|------|----------|-----|
+| 1 | Read `Sitemap:` lines from `robots.txt` | Crawl rules and sitemap locations in one file. Many sites use non-default paths (`/docs/sitemap.xml`, CDN URLs). |
+| 2 | Fallback to `/sitemap.xml` and `/sitemap_index.xml` | Large sites often use `sitemap_index.xml` (a sitemap of sitemaps) instead of a single file. |
+| 3 | Merge priorities across sitemaps | Same URL in multiple sitemaps → keep the **higher** `<priority>` value (`_merge_sitemap_priorities` in `crawler.py`). |
+| 4 | Seed crawl queue | Top 150 sitemap URLs by pre-crawl score enter the priority queue; BFS link discovery fills gaps. |
+
+Nested sitemap indexes are followed recursively (depth and count capped). Bulk sitemaps (video/model indexes) are deprioritized or skipped to protect the 200-page crawl budget.
+
+If no sitemap is available, the crawler falls back to BFS from the homepage.
+
+### Crawl strategy
 
 1. **Normalize** the input URL to a root origin (`scheme://hostname`).
 2. **Discover sitemaps** — read `Sitemap:` URLs from `robots.txt`, then fall back to `/sitemap.xml` and `/sitemap_index.xml`. Nested sitemap indexes are fetched recursively. Seed the crawl queue with discovered `<loc>` entries.
 3. **Fall back to BFS** from the homepage when no sitemap is available, following internal links up to `MAX_DEPTH` (default 3).
 4. For each page, extract **title**, **meta description**, **h1**, and a **content hash** for dedup.
-5. Stop after `MAX_PAGES` (default 200) pages.
+5. Stop after `MAX_PAGES` (default 200) pages — 185 main crawl + 15 optional reserve.
+
+Pages are fetched in priority-queue order (highest importance score first, then depth, then URL).
 
 ### Page selection (llms.txt pipeline)
 
-Pages are ranked by importance score (inbound links, depth, sitemap presence, metadata quality). The top 100 (**Tier 1**) are sent to Claude and grouped into main `##` sections. The next 15 (**Tier 2**) are scanned for low-priority patterns (legal, press, careers, blog) to populate a capped `## Optional` section per the [llms.txt spec](https://llmstxt.org/). Remaining pages are intentionally omitted — llms.txt is a curated entry point, not a full sitemap.
+Pages are pre-filtered using a deterministic importance score (inbound link count, sitemap priority, nav placement, path depth, metadata quality) before categorization. This keeps the categorization prompt focused on the most relevant pages, reduces API cost, and ensures consistent results across runs.
+
+1. **Pre-filter** — hard-skip patterns drop auth, search, asset, and noisy query-param URLs.
+2. **Crawl** — up to 200 pages (185 main + 15 optional reserve for legal/press/blog paths).
+3. **Tier 1 (top 100)** — sent to Claude Haiku; model picks **20** most useful pages and groups them into 4–6 site-specific `##` sections.
+4. **Tier 2 (next 15)** — scanned for optional-pattern URLs (legal, press, careers, blog); up to **8** populate `## Optional`.
+5. **Omitted** — remaining pages are intentionally excluded. llms.txt represents the most important parts of a site, not an exhaustive index.
+
+Pages are ranked by importance score. The top 100 are categorized into main sections. The next tier is scanned for genuinely low-priority pages to populate a capped Optional section. Remaining pages are intentionally omitted.
+
+### Approaches considered
+
+| Approach | Problem |
+|----------|---------|
+| Static file → predetermined sections | Poor accuracy; doesn't account for diverse site structures |
+| Pass 200 URLs + titles; LLM picks and sections in one shot | Too much context; inflates job size and cost |
+| Two-pass LLM (pick top N, then group) | Two API calls; slower, less deterministic, still unreliable |
+| **Chosen: code scores → LLM categorizes top tier** | More deterministic, faster, cheaper; LLM only does grouping and naming |
+
+The chosen approach uses a single **Claude Haiku** call for categorization (plus an optional second call for site description when meta tags are missing). Without an API key, a deterministic fallback groups the top 20 pages under a single `Main` section.
 
 ### Deduplication
 
@@ -142,7 +204,7 @@ Re-crawl a domain, compare against the generation baseline, and auto-regenerate 
 
 ### `POST /generate`
 
-Crawl a website and return a generated llms.txt file. Used by the frontend.
+Crawl a website and return a generated llms.txt file (non-streaming).
 
 **Request body:**
 
@@ -173,6 +235,19 @@ Crawl a website and return a generated llms.txt file. Used by the frontend.
 }
 ```
 
+### `POST /generate/stream`
+
+Same as `POST /generate`, but streams progress as Server-Sent Events. Used by the frontend.
+
+**SSE events:**
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `stage` | `{ "step": "checking_access" }` | Pipeline stage changed |
+| `progress` | `{ "step": "crawling", "pages_crawled": 42 }` | Incremental progress during crawl |
+| `complete` | Full generate response | Generation finished |
+| `error` | `{ "detail": "..." }` | Generation failed |
+
 After each successful generate, scan results are persisted to SQLite. Changes are detected by comparing crawled page hashes to the **generation baseline** (saved when llms.txt was last generated). The home **Updated** badge uses `has_unviewed_changes`, set by the background scheduler when new changes are detected.
 
 ### Background scheduler
@@ -183,8 +258,7 @@ On startup, a background task re-crawls due domains every 24 hours. When content
 
 | Status | Detail |
 |--------|--------|
-| 422 | Invalid URL (request body fails `HttpUrl` validation) |
-| 404 | No pages could be crawled from this site. |
+| 422 | Invalid URL, robots blocked, or no pages could be crawled from this site |
 
 ## Project layout
 
