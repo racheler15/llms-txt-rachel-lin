@@ -36,6 +36,8 @@ This pipeline matches that intent: deterministic page scoring → Claude Haiku s
 
 **Completeness vs. speed:** return results quickly with a high-signal subset, not an exhaustive crawl. The crawler caps at 200 pages, seeds and fetches in importance order (sitemap priority, inbound links, path depth), and skips individual page failures rather than blocking the job. That tradeoff matches the spec — an orientation index for agents, not a full-site mirror. See [Priority Crawl](./backend/README.md#4-priority-crawl) in the backend README for the crawl budget and retry behavior.
 
+**No JavaScript rendering (intentional):** the crawler uses plain HTTP fetches, not a headless browser. That is a deliberate tradeoff — spinning up a browser per page is far slower and more resource-intensive than `GET` + HTML parse, especially at a 200-page budget. Most production AI crawlers (GPTBot, ClaudeBot, PerplexityBot, etc.) work the same way today, so this pipeline reflects what those bots actually see, not what Chrome renders after JavaScript runs. Client-rendered SPAs may look empty or incomplete; the analysis page flags that case with a warning rather than hiding the gap.
+
 `robots.txt` governs crawler access (can a bot visit at all), while `llms.txt` is a content guide for bots that are already allowed in. A site can have a perfect llms.txt but still be invisible to ChatGPT if GPTBot is blocked in robots.txt — these are complementary, not redundant, signals. The AI readiness score reflects both dimensions separately.
 
 ## Implementation
@@ -47,7 +49,7 @@ The optional **narrative section** (freeform text between the blockquote and the
 ## Known Limitations
 
 - **200-page crawl cap** — large sites are only partially represented; pages are ranked by importance before selection.
-- **No JavaScript rendering** — the crawler reads raw HTML only; SPAs and client-rendered content may return incomplete data. The analysis page shows a warning when thin HTML shells are detected.
+- **No JavaScript rendering** — raw HTML only by design (see [Design Rationale](#design-rationale)); SPAs may return incomplete data. The analysis page warns when crawled pages have thin body text (word-count heuristic — see [backend README](./backend/README.md#5-ai-readiness-score)).
 - **Large template-heavy sites** — marketplaces and similar sites can have thousands of near-duplicate SEO landing pages that dominate sitemaps and the crawl budget; output may include a few arbitrary listing pages rather than a curated subset.
 - **Single-pass categorization** — Claude picks pages and invents section names in one call with no post-validation; listing pages that reach tier 1 may land in vague catch-all sections instead of being dropped or routed to Optional.
 - **Claude improves section quality** — without an API key, a deterministic fallback still works but produces less nuanced groupings.

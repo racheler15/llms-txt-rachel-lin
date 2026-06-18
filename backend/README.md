@@ -114,13 +114,15 @@ See [Rate Limiting](#rate-limiting) for the retry flowchart.
 
 ### 5. AI Readiness Score
 
-After the crawl, `compute_readiness()` in `readiness.py` scores the site across five dimensions: existing llms.txt, AI bot access (robots.txt), structured data on the homepage, content clarity (meta descriptions, word count), and site structure (sitemap, HTTP errors). The total score and top recommendations are returned to the frontend analysis page.
+After the crawl, `compute_readiness()` in `readiness.py` scores the site across five dimensions: existing llms.txt, AI bot access (robots.txt), structured data on the homepage, content clarity (meta descriptions, word count), and site structure (sitemap, HTTP errors). The total score and recommendations are returned to the frontend analysis page. Recommendations are deterministic strings from each scoring dimension (not LLM-generated), concatenated in fixed priority order.
 
 **JavaScript detection.** The crawler fetches raw HTML only. After scoring, `detect_js_limited_crawl()` sets `js_rendering_likely` when crawled pages look like JS-rendered shells:
 
 - Homepage has fewer than 100 words, or
 - Average word count across crawled pages is below 80, or
 - 40%+ of pages have fewer than 50 words
+
+Word counts come from visible `<body>` text during crawl — not missing tags or framework detection — so this is a heuristic, not proof a site is client-rendered.
 
 The frontend shows a `CrawlWarning` banner when this flag is true (see [Frontend README](../frontend/README.md#known-limitations)).
 
@@ -442,4 +444,5 @@ Defaults are tuned for fast, predictable demo runs during the take-home. Limits 
 - **Page budget is capped at 200.** Large sites will only have a subset represented. Pages are ranked by importance score before selection.
 - **Large template-heavy sites.** Sites with thousands of near-duplicate SEO landing pages (e.g. city or listing URLs sharing the same path pattern) can flood sitemaps and the crawl budget. The crawler ranks by structural signals (depth, inbound links, sitemap priority) but does not cap high-cardinality URL templates, so a few arbitrary listing pages may appear in output on marketplaces.
 - **Single-pass categorization.** Claude picks pages and invents section names in one call with no post-validation; listing pages that reach tier 1 may land in vague catch-all sections instead of being dropped or routed to Optional.
-- **JavaScript-rendered content is not supported.** The crawler fetches raw HTML only. Single-page apps or sites that load content dynamically via JavaScript will return empty or incomplete data. The analysis UI sets `readiness.js_rendering_likely` when crawled pages look like empty shells. See [AI Readiness Score](#5-ai-readiness-score) for detection heuristics.
+- **JavaScript-rendered content is not supported (by design).** The crawler uses plain HTTP fetches, not headless rendering — a speed and cost tradeoff that mirrors how most AI crawlers operate today. See [Design Rationale](../README.md#design-rationale) in the main README. Single-page apps or sites that load content dynamically via JavaScript will return empty or incomplete data. The analysis UI sets `readiness.js_rendering_likely` when crawled pages look like empty shells. See [AI Readiness Score](#5-ai-readiness-score) for detection heuristics.
+- **Global `og:description` fallbacks (e.g. [react.dev](https://react.dev)).** Some server-rendered doc sites ship real page content in the body but reuse one site-wide `og:description` on every page. Description extraction prefers that tag over body text, so link blurbs can collapse to the same generic sentence across the whole llms.txt output.
