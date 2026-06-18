@@ -220,6 +220,8 @@ After the first generate, domains stay in SQLite. `recrawl_domain()` (`regenerat
 
 **Flow:** load baseline → `run_scan` (updates `pages`, `last_scanned_at`) → `detect_changes()` (URL set or body hash differs) → if changed and llms.txt existed, auto-regenerate → scheduler sets badge until `POST /scans/{domain}/mark-viewed`.
 
+**Limitation:** change detection is coarse — any drift across all crawled pages triggers a full regen, not just pages in llms.txt. See [Future work](../README.md#future-work).
+
 `has_content_changes` is computed on read (current vs baseline); `has_unviewed_changes` is the stored “Updated” flag from the scheduler. Config: `SCAN_SCHEDULER_ENABLED`, `SCAN_INTERVAL_HOURS`, `SCAN_SCHEDULER_TICK_SECONDS` — see [Environment Variables](#environment-variables).
 
 ### Rate Limiting

@@ -64,6 +64,7 @@ Potential next features to improve crawling results and llms.txt generation:
 - **Smarter crawl selection** — template caps and URL-pattern deduping so marketplace/SEO landing pages don't dominate sitemaps and the crawl budget; section-aware BFS and better sitemap seeding (often better ROI than raising the 200-page cap).
 - **Crawl tuning controls** — UI presets or sliders for crawl configuration (e.g. 300–500 page budget for large doc sites, lower concurrency, stricter depth) when breadth matters more than speed.
 - **Categorization validation** — post-pass rules to drop or reroute listing-style pages to Optional instead of vague catch-all sections; refine or split the single-pass Claude call if section quality still lags.
+- **Smarter change detection on rescan** — today the scheduler always recrawls (~200 pages), compares `{url: body_hash}` for every crawled page against the last-generate baseline, and regenerates llms.txt on any URL add/remove or single hash mismatch (including pages not in the output). Future: compare only tier-1 / llms.txt-included URLs, ignore crawl-set churn when the 200-page sample shifts, or patch sections incrementally instead of a full Claude regen.
 
 ## Project Layout
 
