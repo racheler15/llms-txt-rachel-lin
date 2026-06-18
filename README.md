@@ -29,6 +29,8 @@ The [spec](https://llmstxt.org) defines llms.txt as a **curated index for on-dem
 
 This pipeline matches that intent: deterministic page scoring → Claude Haiku section grouping → ~100 links max, with the rest intentionally omitted. More pages would mean a sitemap dump, which is exactly what llms.txt is not for.
 
+`robots.txt` governs crawler access (can a bot visit at all), while `llms.txt` is a content guide for bots that are already allowed in. A site can have a perfect llms.txt but still be invisible to ChatGPT if GPTBot is blocked in robots.txt — these are complementary, not redundant, signals. The AI readiness score reflects both dimensions separately.
+
 ## Implementation
 
 Output follows the required spec structure: **H1 title**, optional **blockquote summary**, then **H2 file lists** (plus an `## Optional` section when low-priority pages match).
@@ -44,6 +46,15 @@ The optional **narrative section** (freeform text between the blockquote and the
 - **Claude improves section quality** — without an API key, a deterministic fallback still works but produces less nuanced groupings.
 
 See [Known Limitations](./backend/README.md#known-limitations) in the backend README for additional edge cases.
+
+## Future work
+
+Potential next features to improve crawling results and llms.txt generation:
+
+- **In-app llms.txt editor** — let users tweak sections and links after generation, then save back to the stored scan.
+- **Smarter crawl selection** — template caps and URL-pattern deduping so marketplace/SEO landing pages don't dominate sitemaps and the crawl budget; section-aware BFS and better sitemap seeding (often better ROI than raising the 200-page cap).
+- **Crawl tuning controls** — UI presets or sliders for crawl configuration (e.g. 300–500 page budget for large doc sites, lower concurrency, stricter depth) when breadth matters more than speed.
+- **Categorization validation** — post-pass rules to drop or reroute listing-style pages to Optional instead of vague catch-all sections; refine or split the single-pass Claude call if section quality still lags.
 
 ## Project Layout
 

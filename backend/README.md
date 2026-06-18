@@ -43,9 +43,17 @@ The pipeline below mirrors the [System Architecture](#system-architecture) diagr
 
 ### 1. Input URL & Normalize
 
-Any input URL is validated as `HttpUrl` via Pydantic (`CrawlRequest`) on `POST /generate` before the crawl starts; invalid URLs return 422. The crawler then normalizes the URL to the site root (e.g. `https://stripe.com/pricing` → `https://stripe.com`) so the generated llms.txt reflects the entire site, not a single section.
+Any input URL is validated as `HttpUrl` via Pydantic (`CrawlRequest`) on `POST /generate` before the crawl starts; invalid URLs return 422. The crawler strips the path and uses `scheme://hostname` as the crawl origin (e.g. `https://stripe.com/pricing` → `https://stripe.com`) so generation is not scoped to a single landing page.
 
-**Site scope — `base_domain`:** Every crawl derives a **registrable domain** from the input URL (e.g. `stripe.com` from `https://docs.stripe.com/api`). Computed by `registrable_domain()` in `url_utils.py` using `tldextract`; used by `is_internal_link()` so subdomains (`docs.stripe.com`, `blog.stripe.com`) are treated as internal. **Tradeoff:** relies on the public suffix list — see [Known Limitations](#known-limitations) for edge cases.
+Design considerations — what counts as “the site” when the user pastes any URL:
+
+| Decision | Design consideration |
+|----------|----------------------|
+| **Start from the root, not the path** | llms.txt is meant to represent an **entire property** to an AI, not one section. A user may paste `stripe.com/pricing`; we crawl from `https://stripe.com` (path dropped) so marketing, docs, and product pages can all surface in output. |
+| **`base_domain` = registrable domain** | While crawling, we must decide which links are “same site.” `registrable_domain()` in `url_utils.py` uses **`tldextract`** (public suffix list) to derive e.g. `stripe.com` from any input hostname. `is_internal_link()` treats that domain and all subdomains as internal. |
+| **SaaS split across subdomains** | Many SaaS sites split surfaces by hostname — e.g. `stripe.com` (marketing) and `docs.stripe.com/api` (reference). Registrable-domain matching keeps both in scope during BFS and sitemap merge without requiring the user to run separate scans per subdomain. **Tradeoff:** relies on the public suffix list — see [Known Limitations](#known-limitations) for edge cases. |
+
+The crawl seeds from `base_url` (`scheme://hostname` of the input). Cross-subdomain discovery happens via link-following and sitemap URLs, not by rewriting `docs.stripe.com` to `stripe.com` upfront.
 
 ### 2. Fetch robots.txt
 
@@ -64,8 +72,29 @@ Discovery follows this order:
 | 1 | Official sitemaps from `robots.txt` | If `robots.txt` declares `Sitemap:` URLs, use those — the site’s canonical locations (often non-default paths like `/docs/sitemap.xml` or CDN URLs). |
 | 2 | Conventional path fallback | If robots lists **no** sitemaps, try `/sitemap.xml` and `/sitemap_index.xml` — the standard names most sites use. |
 | 3 | Merge priorities across sitemaps | Same page URL in multiple sitemaps → keep the **higher** `<priority>` value (`_merge_sitemap_priorities` in `crawler.py`). |
-| 4 | Seed crawl queue | Top 150 sitemap URLs by pre-crawl score enter the priority queue; BFS link discovery fills gaps. |
-| 5 | Guess common doc paths | Only when the merged sitemap has **fewer than 20 URLs** — seed paths like `/docs` and `/getting-started`. Skipped when the sitemap is already rich to avoid wasting crawl budget on speculative 404s. |
+| 4 | Guess common doc paths | Only when the merged sitemap has **fewer than 20 URLs** — seed paths like `/docs` and `/getting-started`. Skipped when the sitemap is already rich to avoid wasting crawl budget on speculative 404s. |
+| 5 | Seed crawl queue | Homepage first, then top 150 sitemap URLs by pre-crawl score (`_seed_crawl_queue` in `crawler.py`). BFS link discovery during the crawl fills remaining gaps. |
+
+#### Pre-crawl score
+
+Before any page is fetched, `precrawl_url_score()` in `scoring.py` ranks sitemap URLs so the crawl queue seeds the most likely high-value pages first. Only the top **150** (`SITEMAP_SEED_LIMIT`) make it into the initial queue; BFS link discovery adds more URLs using the same scoring function.
+
+Each URL starts at **0** and accumulates:
+
+| Signal | Weight | Notes |
+|--------|--------|-------|
+| Path depth | `max(0, 4 − segments) × 3` | Shallower paths rank higher; depth beyond ~4 segments gets no bonus |
+| Listed in sitemap | +15 | Every candidate already passed sitemap parse |
+| Sitemap `<priority>` | `priority × 10` | Omitted when the sitemap entry has no priority |
+| High-value first segment | +5 | e.g. `docs`, `pricing`, `about`, `faq` — see `HIGH_VALUE_SEGMENTS` in `constants.py` |
+| Optional-pattern path | −10 | Legal, blog, careers, etc. — deprioritized for the main crawl budget |
+| Query string | −25 | URLs with `?…` rank lower |
+
+Ties break on URL string (ascending). The homepage and guessed doc paths get large fixed boosts when seeded (`HOMEPAGE_BOOST` = 1000, `DOC_PATH_BOOST` = 500) so they always fetch first.
+
+The **15-page optional reserve** uses a simpler variant (`precrawl_optional_url_score`): path depth only, applied to optional-pattern URLs (`/privacy`, `/terms`, …) so legal and similar pages can still be fetched without competing with the main budget.
+
+This is separate from the **post-crawl importance score** in [§7](#7-rank-pages-by-importance), which runs after pages are fetched and uses inbound links, sitemap metadata, path depth, and page metadata quality.
 
 Nested sitemap indexes recurse (depth and count capped). Parse stops at **5,000** page URLs (`MAX_SITEMAP_URLS`) after filtering junk (i.e. hard-skip paths, locale variants, depth > 4, nested blog/news) so the cap favors useful pages; only the top **150** seed the queue. Bulk indexes (video/model) are skipped or deprioritized to protect the 200-page budget. Optional paths (`/privacy`, `/terms`, …) are guessed post-crawl only if the sitemap missed them.
 
@@ -73,7 +102,7 @@ Nested sitemap indexes recurse (depth and count capped). Parse stops at **5,000*
 
 Link discovery seeds the queue (homepage, sitemap URLs, and conditional doc-path guesses). The crawler then:
 
-1. **Priority queue** — fetch pages in score order (importance, then depth, then URL).
+1. **Priority queue** — fetch pages in score order (pre-crawl score, then depth, then URL). See [Pre-crawl score](#pre-crawl-score).
 2. **BFS link discovery** — follow internal links from each fetched page up to `MAX_DEPTH` (default 3).
 3. **Extract** title, meta description, h1, and a content hash per page.
 4. **Budget** — stop at `MAX_PAGES` (default 200): 185 main crawl + 15 optional reserve.
@@ -93,20 +122,22 @@ Crawl results, page hashes, and readiness JSON are persisted via `save_scan()` i
 
 ### 7. Rank Pages by Importance
 
-Before categorization, pages are pre-filtered and ranked with a deterministic importance score (inbound link count, sitemap priority, nav placement, path depth, metadata quality). Hard-skip patterns drop auth, search, asset, and noisy query-param URLs.
+Before categorization, pages are pre-filtered and ranked with a deterministic **post-crawl** importance score (`calculate_importance_score()` in `scoring.py`): inbound link count, sitemap priority, path depth, metadata quality, plus penalties for duplicate content and hard-skip URL patterns. Hard-skip patterns drop auth, search, asset, and noisy query-param URLs. This is separate from the [pre-crawl score](#pre-crawl-score) used to seed and prioritize the crawl queue.
 
-### 8. Claude Haiku Categorizes Top 100
+### 8. LLM Categorization
 
-The top 100 ranked candidates are sent to **Claude Haiku** (`claude-haiku-4-5-20251001`). The model picks **30** most useful pages and groups them into 4–6 site-specific `##` sections. Without an API key, a deterministic fallback groups the top 30 under a single `Main` section.
+The top 100 ranked candidates are sent to an LLM (**Claude Haiku**, `claude-haiku-4-5-20251001` in `generator.py`). The model picks **30** most useful pages and groups them into 4–6 site-specific `##` sections. Without an API key, a deterministic fallback groups the top 30 under a single `Main` section.
 
-| Approach | Problem |
-|----------|---------|
+Design considerations — how much work to give the model vs. code:
+
+| Approach | Design consideration |
+|----------|----------------------|
 | Static file → predetermined sections | Poor accuracy; doesn't account for diverse site structures |
 | Pass 200 URLs + titles; LLM picks and sections in one shot | Too much context; inflates job size and cost |
 | Two-pass LLM (pick top N, then group) | Two API calls; slower, less deterministic, still unreliable |
 | **Chosen: code scores → LLM categorizes top tier** | More deterministic, faster, cheaper; LLM only does grouping and naming |
 
-An optional second Claude call generates a one-sentence site description when homepage meta tags are missing.
+An optional second LLM call generates a one-sentence site description when homepage meta tags are missing.
 
 ### 9. Add Optional Section
 
@@ -115,6 +146,19 @@ Any crawled page **outside the top 100** whose URL matches optional patterns (le
 ### 10. Assemble llms.txt
 
 `generate_llms_txt()` assembles the spec-compliant output: **H1 title**, optional **blockquote** summary, then **H2 file lists** (plus `## Optional` when applicable). Remaining crawled pages are intentionally omitted — up to **100 links** total across all sections. llms.txt represents the most important parts of a site, not an exhaustive index.
+
+### 11. Rescan & Change Detection
+
+After the first generate, domains stay in SQLite. `recrawl_domain()` (`regenerate.py`) re-crawls and compares page hashes to the last llms.txt baseline (`generation_hashes_json`).
+
+| Trigger | Entry | Badge (`has_unviewed_changes`) |
+|---------|-------|--------------------------------|
+| **Scheduler** (default every 24h, checked every 15 min) | `scheduler.py` | Set when content changed |
+| **Manual** `POST /scans/{domain}/recrawl` | Analysis page rescan | Not set |
+
+**Flow:** load baseline → `run_scan` (updates `pages`, `last_scanned_at`) → `detect_changes()` (URL set or body hash differs) → if changed and llms.txt existed, auto-regenerate → scheduler sets badge until `POST /scans/{domain}/mark-viewed`.
+
+`has_content_changes` is computed on read (current vs baseline); `has_unviewed_changes` is the stored “Updated” flag from the scheduler. Config: `SCAN_SCHEDULER_ENABLED`, `SCAN_INTERVAL_HOURS`, `SCAN_SCHEDULER_TICK_SECONDS` — see [Environment Variables](#environment-variables).
 
 ### Rate Limiting
 
@@ -215,9 +259,7 @@ Clear the unviewed notification flag when the user opens the analysis page. Retu
 
 ### `POST /scans/{domain}/recrawl`
 
-Re-crawl a domain, compare against the generation baseline, and auto-regenerate llms.txt when content changed. Manual recrawls do not set the home-screen unviewed badge.
-
-`POST /scans/{domain}/refresh` is an alias for recrawl.
+Re-crawl on demand — same as [§11](#11-rescan--change-detection) but without the **Updated** badge. `POST /scans/{domain}/refresh` is an alias.
 
 **Response:**
 
@@ -287,13 +329,7 @@ After each successful generate, scan results are persisted to SQLite. See [Datab
 
 ### Background Scheduler
 
-On startup, a background task re-crawls due domains every 24 hours. When content changes, it auto-regenerates llms.txt and sets `has_unviewed_changes` until the user opens the analysis page.
-
-**Errors:**
-
-| Status | Detail |
-|--------|--------|
-| 422 | Invalid URL, robots blocked, or no pages could be crawled from this site |
+Background loop on startup (`scheduler.py`). Re-crawls domains due after `SCAN_INTERVAL_HOURS` (default 24). See [§11](#11-rescan--change-detection).
 
 ## Database
 
@@ -334,10 +370,7 @@ On `save_scan()`, old `pages` rows for the domain are deleted and replaced with 
 
 ### Change Detection
 
-1. **`finalize_generation()`** — after llms.txt is generated, copies current page hashes into `generation_hashes_json` and clears `has_unviewed_changes`.
-2. **Next crawl** — `save_scan()` refreshes `pages` with new hashes.
-3. **`detect_changes()`** — compares current `pages` hashes to `generation_hashes_json`. If URLs or hashes differ, content changed since the last generation.
-4. **Scheduler / badge** — on change, `has_unviewed_changes` is set (scheduler auto-regenerates llms.txt when a prior file exists). Opening the analysis page calls `mark_viewed()` to clear the badge.
+`generation_hashes_json` stores `{url: content_hash}` at last generate. After a rescan, `detect_changes()` compares it to current `pages`. On drift, the scheduler auto-regenerates llms.txt and sets `has_unviewed_changes`. Details: [§11](#11-rescan--change-detection).
 
 ## Project Layout
 
