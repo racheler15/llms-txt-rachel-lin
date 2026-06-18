@@ -8,6 +8,11 @@ Generate spec-compliant [llms.txt](https://llmstxt.org) files from any website U
 
 Take-home implementation built for **site owners and marketing teams** who want to understand and improve their site’s AI visibility — the problem Profound is solving. This app is one concrete piece: crawl a site, score AI readiness, and generate an llms.txt that helps models find the right pages. The live app above demos that flow end to end.
 
+## Demo
+
+Quick runthrough of the implementation with audio! 
+https://drive.google.com/file/d/1hUvXgc3Udg_zZTgRAmAr_74mTuTpedmK/view?usp=sharing
+
 ## Usage
 
 1. Enter any site URL on the homepage (e.g. `https://stripe.com`).
