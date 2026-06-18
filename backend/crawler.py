@@ -26,7 +26,7 @@ from models import Page
 from progress import (
     STAGE_CHECKING_ACCESS,
     STAGE_CRAWLING,
-    STAGE_DISCOVERING_PAGES,
+    STAGE_DISCOVERING_LINKS,
     ProgressCallback,
     emit_progress,
     emit_stage,
@@ -914,7 +914,7 @@ async def crawl_site(
                 robots_blocked=robots_blocked,
                 homepage_timed_out=homepage_timed_out,
             )
-        emit_stage(on_progress, STAGE_DISCOVERING_PAGES)
+        emit_stage(on_progress, STAGE_DISCOVERING_LINKS)
         sitemap_candidates = _sitemap_candidate_urls(base_url, robots_sitemaps)
         if robots_sitemaps:
             logger.info("robots.txt declared %d sitemap(s): %s", len(robots_sitemaps), robots_sitemaps)

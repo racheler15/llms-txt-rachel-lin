@@ -59,7 +59,7 @@ React UI for generating spec-compliant [llms.txt](https://llmstxt.org) files fro
 
 1. User submits a URL in `GeneratorForm`.
 2. `useGenerate` POSTs to `/generate/stream` and parses SSE events via `readSseStream`.
-3. Progress events update `GenerationSteps` (`checking_access` → `discovering_pages` → `crawling` → `analyzing_readiness` → `generating`).
+3. Progress events update `GenerationSteps` (`checking_access` → `discovering_links` → `crawling` → `analyzing_readiness` → `generating`).
 4. On `complete`, the response is mapped to `AnalysisData`, seeded into the React Query cache, and the app navigates to `/analysis/:domain`.
 5. `Analysis` loads scan data with `useScan`, calls `useMarkViewed` on mount, and renders the overview, optional `CrawlWarning` (when JS-heavy crawl is detected), readiness, categories, and output panels.
 6. User can rescan from the analysis page via `useRecrawl`.

@@ -28,7 +28,7 @@ function RecentScans() {
     return (
       <section className="recent-scans">
         <h2 className="recent-scans-heading">Recent</h2>
-        <p className="recent-scans-empty">No recently generated files.</p>
+        <p className="recent-scans-status">No recently generated files.</p>
       </section>
     )
   }

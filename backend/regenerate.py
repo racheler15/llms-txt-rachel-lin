@@ -32,6 +32,7 @@ async def recrawl_domain(
     url: str,
     *,
     mark_unviewed: bool,
+    on_progress: ProgressCallback = None,
 ) -> RecrawlResult:
     domain_id = get_domain_id(display_name)
     baseline = load_generation_hashes(domain_id) if domain_id else {}
@@ -39,7 +40,7 @@ async def recrawl_domain(
     stored = get_stored_scan(display_name)
     had_llms_txt = bool(stored and stored.get("llms_txt"))
 
-    scan = await run_scan(url, persist=True)
+    scan = await run_scan(url, persist=True, on_progress=on_progress)
     domain_id = get_domain_id(display_name) or scan.domain_id
     current_hashes = load_page_hashes(domain_id) if domain_id else page_hash_map(scan.crawl.pages)
 
@@ -47,7 +48,9 @@ async def recrawl_domain(
 
     regenerated = False
     if content_changed and had_llms_txt and scan.crawl.pages:
-        llms_txt, pages_included = await build_llms_txt(scan.crawl.pages)
+        llms_txt, pages_included = await build_llms_txt(
+            scan.crawl.pages, on_progress=on_progress
+        )
         finalize_generation(display_name, llms_txt=llms_txt, pages_included=pages_included)
         regenerated = True
 

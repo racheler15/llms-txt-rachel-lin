@@ -26,6 +26,9 @@ function GenerationSteps({ progress }: GenerationStepsProps) {
             </span>
             <span className="generation-step-label">
               {step.label}
+              {step.id === 'discovering_links' && status === 'active' && (
+                <span className="generation-step-detail"> — checking sitemaps</span>
+              )}
               {step.id === 'crawling' && status === 'active' && progress.pagesCrawled != null && (
                 <span className="generation-step-detail">{` — ${progress.pagesCrawled} pages found`}</span>
               )}

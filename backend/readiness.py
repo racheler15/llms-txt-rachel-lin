@@ -302,7 +302,7 @@ def _rank_recommendations(dimensions: dict[str, ReadinessDimension]) -> list[str
         if dimension:
             ranked.extend(dimension.recommendations)
 
-    return ranked[:3]
+    return ranked
 
 
 def compute_readiness(crawl: CrawlResult) -> ReadinessResult:

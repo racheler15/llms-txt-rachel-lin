@@ -9,7 +9,6 @@ import AnalysisOverview from './analysis-overview/AnalysisOverview'
 import CategoriesBreakdown from './categories-breakdown/CategoriesBreakdown'
 import { extractHostnameFromLlmsTxt, formatScannedLabel, parseLlmsTxtStats } from './analysisUtils'
 import GeneratedOutput from './generated-output/GeneratedOutput'
-import CrawlWarning from './crawl-warning/CrawlWarning'
 import ReadinessScore from './readiness-score/ReadinessScore'
 import './Analysis.css'
 
@@ -20,7 +19,7 @@ function Analysis() {
   const markedViewedRef = useRef(false)
   const { data: analysis, isLoading, isError, error, isFetching } = useScan(domainParam)
   const { mutateAsync: markViewed } = useMarkViewed(domainParam)
-  const { mutateAsync: recrawl, isPending: isRescanning } = useRecrawl(domainParam)
+  const { mutateAsync: recrawl, isPending: isRescanning, progress: rescanProgress } = useRecrawl(domainParam)
 
   useEffect(() => {
     if (!domainParam) {
@@ -53,9 +52,11 @@ function Analysis() {
 
   if (!analysis) {
     if (isError) {
+      const errorMessage = error?.message ?? 'Unable to load analysis.'
+
       return (
         <section className="analysis-error">
-          <p>{error?.message ?? 'Unable to load analysis.'}</p>
+          <p>{errorMessage}</p>
           <button type="button" onClick={() => navigate('/')}>
             Back to home
           </button>
@@ -68,11 +69,20 @@ function Analysis() {
   const llmsTxt = analysis.llmsTxt
   const llmsStats = llmsTxt ? parseLlmsTxtStats(llmsTxt) : null
   const categoryCount = llmsStats?.categoryCount ?? 0
+  const pagesCrawled = analysis.pagesCrawled
   const parsedPagesIncluded = llmsStats?.pagesIncluded ?? analysis.pagesIncluded
-  const scannedLabel = analysis.lastScannedAt
-    ? formatScannedLabel(analysis.lastScannedAt)
+  const pagesIncluded = analysis.pagesIncluded ?? parsedPagesIncluded
+  const lastScannedAt = analysis.lastScannedAt
+  const scannedLabel = lastScannedAt
+    ? formatScannedLabel(lastScannedAt)
     : 'scanned just now'
   const domain = analysis.domain || domainParam || extractHostnameFromLlmsTxt(llmsTxt ?? '')
+  const readiness = analysis.readiness
+  const jsRenderingLikely = readiness?.js_rendering_likely ?? false
+  const aiReadiness = readiness?.total
+  const isRescanningUi = isRescanning || isFetching
+  const showRescanProgress = isRescanning && rescanProgress != null
+  const showCrawlWarning = jsRenderingLikely && !isRescanning
 
   async function handleRescan() {
     await recrawl()
@@ -83,16 +93,17 @@ function Analysis() {
     <>
       <AnalysisOverview
         domain={domain}
-        pagesCrawled={analysis.pagesCrawled}
-        pagesIncluded={analysis.pagesIncluded ?? parsedPagesIncluded}
+        pagesCrawled={pagesCrawled}
+        pagesIncluded={pagesIncluded}
         categoryCount={categoryCount}
-        aiReadiness={analysis.readiness?.total}
+        aiReadiness={aiReadiness}
         scannedLabel={scannedLabel}
-        isRescanning={isRescanning || isFetching}
+        isRescanning={isRescanningUi}
+        showCrawlWarning={showCrawlWarning}
+        rescanProgress={showRescanProgress ? rescanProgress : null}
         onRescan={handleRescan}
       />
-      {analysis.readiness?.js_rendering_likely && <CrawlWarning />}
-      {analysis.readiness && <ReadinessScore readiness={analysis.readiness} />}
+      {readiness && <ReadinessScore readiness={readiness} />}
       {llmsTxt && <CategoriesBreakdown llmsTxt={llmsTxt} />}
       {llmsTxt ? (
         <GeneratedOutput llmsTxt={llmsTxt} domain={domain} />

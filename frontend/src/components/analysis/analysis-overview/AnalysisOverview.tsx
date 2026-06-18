@@ -1,5 +1,8 @@
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Renew } from '@carbon/icons-react'
+import GenerationSteps from '../../homepage/generator-form/GenerationSteps'
+import type { GenerateProgress } from '../../../types/generation'
+import CrawlWarning from '../crawl-warning/CrawlWarning'
 import StatCards, { type StatItem } from './stat-cards/StatCards'
 import './AnalysisOverview.css'
 
@@ -11,6 +14,8 @@ interface AnalysisOverviewProps {
   aiReadiness?: number
   scannedLabel?: string
   isRescanning?: boolean
+  showCrawlWarning?: boolean
+  rescanProgress?: GenerateProgress | null
   onRescan?: () => void
 }
 
@@ -26,6 +31,8 @@ function AnalysisOverview({
   aiReadiness,
   scannedLabel = 'scanned just now',
   isRescanning = false,
+  showCrawlWarning = false,
+  rescanProgress = null,
   onRescan,
 }: AnalysisOverviewProps) {
   const navigate = useNavigate()
@@ -67,6 +74,8 @@ function AnalysisOverview({
         </div>
       </div>
 
+      {showCrawlWarning && <CrawlWarning />}
+      {rescanProgress && <GenerationSteps progress={rescanProgress} />}
       <StatCards stats={stats} />
     </section>
   )

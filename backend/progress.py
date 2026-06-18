@@ -4,7 +4,7 @@ from typing import Any
 ProgressCallback = Callable[[str, dict[str, Any]], None] | None
 
 STAGE_CHECKING_ACCESS = "checking_access"
-STAGE_DISCOVERING_PAGES = "discovering_pages"
+STAGE_DISCOVERING_LINKS = "discovering_links"
 STAGE_CRAWLING = "crawling"
 STAGE_ANALYZING_READINESS = "analyzing_readiness"
 STAGE_GENERATING = "generating"

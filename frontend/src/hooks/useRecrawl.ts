@@ -1,6 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
+import { consumeProgressStream } from '../lib/consumeProgressStream'
 import { mapScanResponse, type AnalysisData } from '../types/analysis'
-import { parseApiError } from '../types/errors'
+import { type GenerateProgress, type GenerationStepId } from '../types/generation'
 import { recentScansQueryKey } from './useRecentScans'
 import { scanQueryKey } from './useScan'
 
@@ -11,30 +13,48 @@ export interface RecrawlResult extends AnalysisData {
   regenerated: boolean
 }
 
+function mapRecrawlResponse(data: Record<string, unknown>): RecrawlResult {
+  return {
+    ...mapScanResponse(data),
+    contentChanged: Boolean(data.content_changed),
+    regenerated: Boolean(data.regenerated),
+  }
+}
+
+async function recrawlWithStream(
+  domain: string,
+  onProgress: (progress: GenerateProgress) => void,
+): Promise<RecrawlResult> {
+  const response = await fetch(
+    `${API_URL}/scans/${encodeURIComponent(domain)}/recrawl/stream`,
+    { method: 'POST' },
+  )
+
+  return consumeProgressStream(response, onProgress, mapRecrawlResponse, {
+    missingResultMessage: 'Rescan finished without a result.',
+  })
+}
+
 export function useRecrawl(domain: string | undefined) {
   const queryClient = useQueryClient()
+  const [progress, setProgress] = useState<GenerateProgress | null>(null)
 
-  return useMutation({
+  const mutation = useMutation({
     mutationFn: async (): Promise<RecrawlResult> => {
-      const response = await fetch(`${API_URL}/scans/${encodeURIComponent(domain!)}/recrawl`, {
-        method: 'POST',
-      })
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => null)
-        throw parseApiError(body, `Server returned ${response.status}`)
-      }
-
-      const data = await response.json()
-      return {
-        ...mapScanResponse(data),
-        contentChanged: Boolean(data.content_changed),
-        regenerated: Boolean(data.regenerated),
-      }
+      setProgress({ step: 'checking_access' satisfies GenerationStepId })
+      return recrawlWithStream(domain!, setProgress)
     },
     onSuccess: (result) => {
       queryClient.setQueryData(scanQueryKey(domain ?? ''), result)
       queryClient.invalidateQueries({ queryKey: recentScansQueryKey })
     },
+    onSettled: () => {
+      setProgress(null)
+    },
   })
+
+  return {
+    ...mutation,
+    progress,
+  }
 }

@@ -108,6 +108,62 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+def _sse_streaming_response(coro_factory):
+    async def event_generator():
+        queue: asyncio.Queue[tuple[str, dict] | None] = asyncio.Queue()
+
+        def on_progress(event: str, data: dict) -> None:
+            queue.put_nowait((event, data))
+
+        async def run_pipeline() -> None:
+            try:
+                result = await coro_factory(on_progress)
+                await queue.put(("complete", result.model_dump()))
+            except ScanError as exc:
+                await queue.put(("error", error_detail(exc)))
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(run_pipeline())
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            event, data = item
+            yield _sse_event(event, data)
+
+        await task
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _run_recrawl_pipeline(
+    display_name: str,
+    url: str,
+    on_progress,
+) -> RecrawlResponse:
+    result = await recrawl_domain(
+        display_name, url, mark_unviewed=False, on_progress=on_progress
+    )
+    updated = get_stored_scan(display_name)
+    if not updated:
+        raise HTTPException(status_code=404, detail="No scan found for this domain.")
+
+    return _to_recrawl_response(
+        updated,
+        content_changed=result.content_changed,
+        regenerated=result.regenerated,
+    )
+
+
 async def _run_generate_pipeline(
     url: str,
     on_progress,
@@ -160,6 +216,26 @@ async def mark_scan_viewed(domain: str):
     return _to_scan_response(updated)
 
 
+@app.post("/scans/{domain}/recrawl/stream")
+async def recrawl_stream(domain: str):
+    display_name = _normalize_domain_param(domain)
+    stored = get_stored_scan(display_name)
+    if not stored:
+        raise HTTPException(status_code=404, detail="No scan found for this domain.")
+
+    url = stored["url"]
+
+    async def run(on_progress):
+        return await _run_recrawl_pipeline(display_name, url, on_progress)
+
+    return _sse_streaming_response(run)
+
+
+@app.post("/scans/{domain}/refresh/stream")
+async def refresh_stream(domain: str):
+    return await recrawl_stream(domain)
+
+
 @app.post("/scans/{domain}/recrawl", response_model=RecrawlResponse)
 async def recrawl_scan(domain: str):
     display_name = _normalize_domain_param(domain)
@@ -198,37 +274,7 @@ async def generate(request: CrawlRequest):
 
 @app.post("/generate/stream")
 async def generate_stream(request: CrawlRequest):
-    async def event_generator():
-        queue: asyncio.Queue[tuple[str, dict] | None] = asyncio.Queue()
+    async def run(on_progress):
+        return await _run_generate_pipeline(str(request.url), on_progress)
 
-        def on_progress(event: str, data: dict) -> None:
-            queue.put_nowait((event, data))
-
-        async def run_pipeline() -> None:
-            try:
-                result = await _run_generate_pipeline(str(request.url), on_progress=on_progress)
-                await queue.put(("complete", result.model_dump()))
-            except ScanError as exc:
-                await queue.put(("error", error_detail(exc)))
-            finally:
-                await queue.put(None)
-
-        task = asyncio.create_task(run_pipeline())
-
-        while True:
-            item = await queue.get()
-            if item is None:
-                break
-            event, data = item
-            yield _sse_event(event, data)
-
-        await task
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return _sse_streaming_response(run)

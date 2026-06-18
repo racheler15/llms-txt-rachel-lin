@@ -1,6 +1,6 @@
 export const GENERATION_STEPS = [
-  { id: 'checking_access', label: 'Checking site access' },
-  { id: 'discovering_pages', label: 'Discovering pages' },
+  { id: 'checking_access', label: 'Checking robots.txt and site access' },
+  { id: 'discovering_links', label: 'Discovering links' },
   { id: 'crawling', label: 'Crawling pages' },
   { id: 'analyzing_readiness', label: 'Analyzing AI readiness' },
   { id: 'generating', label: 'Generating llms.txt' },

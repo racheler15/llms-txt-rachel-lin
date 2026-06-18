@@ -23,6 +23,11 @@
   margin-bottom: 1.5rem;
 }
 
+.analysis-overview-container .generation-steps {
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+}
+
 .analysis-overview-title-row {
   display: flex;
   flex-wrap: wrap;

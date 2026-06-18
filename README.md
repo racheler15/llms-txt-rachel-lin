@@ -29,6 +29,8 @@ The [spec](https://llmstxt.org) defines llms.txt as a **curated index for on-dem
 
 This pipeline matches that intent: deterministic page scoring → Claude Haiku section grouping → ~100 links max, with the rest intentionally omitted. More pages would mean a sitemap dump, which is exactly what llms.txt is not for.
 
+**Completeness vs. speed:** return results quickly with a high-signal subset, not an exhaustive crawl. The crawler caps at 200 pages, seeds and fetches in importance order (sitemap priority, inbound links, path depth), and skips individual page failures rather than blocking the job. That tradeoff matches the spec — an orientation index for agents, not a full-site mirror. See [Priority Crawl](./backend/README.md#4-priority-crawl) in the backend README for the crawl budget and retry behavior.
+
 `robots.txt` governs crawler access (can a bot visit at all), while `llms.txt` is a content guide for bots that are already allowed in. A site can have a perfect llms.txt but still be invisible to ChatGPT if GPTBot is blocked in robots.txt — these are complementary, not redundant, signals. The AI readiness score reflects both dimensions separately.
 
 ## Implementation
