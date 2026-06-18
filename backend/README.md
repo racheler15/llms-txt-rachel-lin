@@ -114,7 +114,39 @@ See [Rate Limiting](#rate-limiting) for the retry flowchart.
 
 ### 5. AI Readiness Score
 
-After the crawl, `compute_readiness()` in `readiness.py` scores the site across five dimensions: existing llms.txt, AI bot access (robots.txt), structured data on the homepage, content clarity (meta descriptions, word count), and site structure (sitemap, HTTP errors). The total score and recommendations are returned to the frontend analysis page. Recommendations are deterministic strings from each scoring dimension (not LLM-generated), concatenated in fixed priority order.
+After the crawl, `compute_readiness()` in `readiness.py` scores the site across five dimensions. The total score and recommendations are returned to the frontend analysis page. Recommendations are deterministic strings from each scoring dimension (not LLM-generated), concatenated in fixed priority order.
+
+| Dimension | Max | What is measured |
+|-----------|-----|------------------|
+| **llms.txt file** | 20 | `/llms.txt` exists at crawl time |
+| **AI bot access** | 25 | `robots.txt` — 5 pts each for GPTBot, ClaudeBot, PerplexityBot, Google-Extended, FacebookBot not fully disallowed |
+| **Structured data** | 20 | Homepage HTML only (depth-0 fetch) |
+| **Content clarity** | 20 | All crawled pages |
+| **Site structure** | 15 | Crawl metadata |
+| **Total** | **100** | |
+
+**Structured data (20).** Three yes/no signals on the homepage:
+
+| Signal | Detection | Points |
+|--------|-----------|--------|
+| JSON-LD | `<script type="application/ld+json">` present | 10 |
+| `og:title` | `<meta property="og:title">` with content | 5 |
+| `og:description` | `<meta property="og:description">` with content | 5 |
+
+**Content clarity (20).** Two sub-scores summed:
+
+| Sub-score | Max | Rule |
+|-----------|-----|------|
+| Meta descriptions | 10 | Share of pages with a `<meta name="description">` longer than 50 chars, scaled to 10 pts |
+| Word count | 10 | Avg body word count across all crawled pages: >300 → 10, >150 → 5, else 0 |
+
+**Site structure (15).** Three yes/no signals:
+
+| Signal | Points |
+|--------|--------|
+| Sitemap found during discovery | 8 |
+| Crawl origin uses HTTPS | 4 |
+| Zero HTTP fetch errors (after retries) and at least one page crawled | 3 |
 
 **JavaScript detection.** The crawler fetches raw HTML only. After scoring, `detect_js_limited_crawl()` sets `js_rendering_likely` when crawled pages look like JS-rendered shells:
 
@@ -132,7 +164,27 @@ Crawl results, page hashes, and readiness JSON are persisted via `save_scan()` i
 
 ### 7. Rank Pages by Importance
 
-Before categorization, pages are pre-filtered and ranked with a deterministic **post-crawl** importance score (`calculate_importance_score()` in `scoring.py`): inbound link count, sitemap priority, path depth, metadata quality, plus penalties for duplicate content and hard-skip URL patterns. Hard-skip patterns drop auth, search, asset, and noisy query-param URLs. This is separate from the [pre-crawl score](#pre-crawl-score) used to seed and prioritize the crawl queue.
+Before categorization, pages are pre-filtered and ranked with a deterministic **post-crawl** importance score (`calculate_importance_score()` in `scoring.py`). This is separate from the [pre-crawl score](#pre-crawl-score) used to seed and prioritize the crawl queue.
+
+**Candidate filter** (`_candidate_pages()` in `generator.py`) drops the homepage, hard-skip URLs (auth, search, assets, etc.), and any URL with query strings, then dedupes by normalized URL.
+
+Each remaining page starts at **0** and accumulates:
+
+| Signal | Weight | Notes |
+|--------|--------|-------|
+| Inbound internal links | `count × 10` | Counted during crawl — pages many others link to rank highest |
+| Crawl depth | `(MAX_DEPTH − depth) × 5` | Closer to homepage ranks higher (default `MAX_DEPTH` = 3) |
+| Path depth | `max(0, 4 − segments) × 3` | Shallower paths rank higher |
+| Listed in sitemap | +15 | Set during crawl enrichment |
+| Sitemap `<priority>` | `priority × 10` | Omitted when the sitemap entry has no priority |
+| Description ≥ 20 chars | +10 | Uses extracted description, then h1, then title |
+| Title or h1 only | +3 | Weaker metadata fallback |
+| Duplicate body hash | −15 | Near-identical content at different URLs |
+| High-value first segment | +5 | e.g. `docs`, `pricing`, `api` — see `HIGH_VALUE_SEGMENTS` |
+| Query string | −25 | Penalty on URL (candidates with queries are already filtered out) |
+| Hard-skip path pattern | −50 | Login, assets, search, etc. |
+
+Pages are sorted by score (highest first). The **top 100** (`TIER_1_SIZE`) go to Claude; the fallback without an API key takes the **top 30** directly. Pages outside the top 100 that match optional URL patterns (`/privacy`, `/terms`, …) can fill `## Optional` (max 8).
 
 ### 8. LLM Categorization
 

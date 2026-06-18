@@ -38,7 +38,7 @@ This pipeline matches that intent: deterministic page scoring → Claude Haiku s
 
 **No JavaScript rendering (intentional):** the crawler uses plain HTTP fetches, not a headless browser. That is a deliberate tradeoff — spinning up a browser per page is far slower and more resource-intensive than `GET` + HTML parse, especially at a 200-page budget. Most production AI crawlers (GPTBot, ClaudeBot, PerplexityBot, etc.) work the same way today, so this pipeline reflects what those bots actually see, not what Chrome renders after JavaScript runs. Client-rendered SPAs may look empty or incomplete; the analysis page flags that case with a warning rather than hiding the gap.
 
-`robots.txt` governs crawler access (can a bot visit at all), while `llms.txt` is a content guide for bots that are already allowed in. A site can have a perfect llms.txt but still be invisible to ChatGPT if GPTBot is blocked in robots.txt — these are complementary, not redundant, signals. The AI readiness score reflects both dimensions separately.
+`robots.txt` governs crawler access (can a bot visit at all), while `llms.txt` is a content guide for bots that are already allowed in. A site can have a perfect llms.txt but still be invisible to ChatGPT if GPTBot is blocked in robots.txt — these are complementary, not redundant, signals. The AI readiness score reflects both dimensions separately. See [AI Readiness Score](./backend/README.md#5-ai-readiness-score) in the backend README for the full scoring breakdown.
 
 ## Implementation
 
