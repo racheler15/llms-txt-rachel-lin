@@ -116,6 +116,14 @@ See [Rate Limiting](#rate-limiting) for the retry flowchart.
 
 After the crawl, `compute_readiness()` in `readiness.py` scores the site across five dimensions: existing llms.txt, AI bot access (robots.txt), structured data on the homepage, content clarity (meta descriptions, word count), and site structure (sitemap, HTTP errors). The total score and top recommendations are returned to the frontend analysis page.
 
+**JavaScript detection.** The crawler fetches raw HTML only. After scoring, `detect_js_limited_crawl()` sets `js_rendering_likely` when crawled pages look like JS-rendered shells:
+
+- Homepage has fewer than 100 words, or
+- Average word count across crawled pages is below 80, or
+- 40%+ of pages have fewer than 50 words
+
+The frontend shows a `CrawlWarning` banner when this flag is true (see [Frontend README](../frontend/README.md#known-limitations)).
+
 ### 6. Save Scan to SQLite
 
 Crawl results, page hashes, and readiness JSON are persisted via `save_scan()` in `db.py`. See [Database](#database) for schema and change-detection details.
@@ -434,4 +442,4 @@ Defaults are tuned for fast, predictable demo runs during the take-home. Limits 
 - **Page budget is capped at 200.** Large sites will only have a subset represented. Pages are ranked by importance score before selection.
 - **Large template-heavy sites.** Sites with thousands of near-duplicate SEO landing pages (e.g. city or listing URLs sharing the same path pattern) can flood sitemaps and the crawl budget. The crawler ranks by structural signals (depth, inbound links, sitemap priority) but does not cap high-cardinality URL templates, so a few arbitrary listing pages may appear in output on marketplaces.
 - **Single-pass categorization.** Claude picks pages and invents section names in one call with no post-validation; listing pages that reach tier 1 may land in vague catch-all sections instead of being dropped or routed to Optional.
-- **JavaScript-rendered content is not supported.** The crawler fetches raw HTML only. Single-page apps or sites that load content dynamically via JavaScript will return empty or incomplete data. The analysis UI sets `readiness.js_rendering_likely` when crawled pages look like empty shells.
+- **JavaScript-rendered content is not supported.** The crawler fetches raw HTML only. Single-page apps or sites that load content dynamically via JavaScript will return empty or incomplete data. The analysis UI sets `readiness.js_rendering_likely` when crawled pages look like empty shells. See [AI Readiness Score](#5-ai-readiness-score) for detection heuristics.

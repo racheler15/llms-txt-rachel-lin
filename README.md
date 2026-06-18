@@ -40,7 +40,7 @@ The optional **narrative section** (freeform text between the blockquote and the
 ## Known Limitations
 
 - **200-page crawl cap** — large sites are only partially represented; pages are ranked by importance before selection.
-- **No JavaScript rendering** — the crawler reads raw HTML only; SPAs and client-rendered content may return incomplete data.
+- **No JavaScript rendering** — the crawler reads raw HTML only; SPAs and client-rendered content may return incomplete data. The analysis page shows a warning when thin HTML shells are detected.
 - **Large template-heavy sites** — marketplaces and similar sites can have thousands of near-duplicate SEO landing pages that dominate sitemaps and the crawl budget; output may include a few arbitrary listing pages rather than a curated subset.
 - **Single-pass categorization** — Claude picks pages and invents section names in one call with no post-validation; listing pages that reach tier 1 may land in vague catch-all sections instead of being dropped or routed to Optional.
 - **Claude improves section quality** — without an API key, a deterministic fallback still works but produces less nuanced groupings.

@@ -9,7 +9,10 @@ React UI for generating spec-compliant [llms.txt](https://llmstxt.org) files fro
 - [Routes](#routes)
 - [Components](#components)
 - [Data Flow](#data-flow)
+- [Error cases](#error-cases)
+- [Scheduled rescans](#scheduled-rescans)
 - [Project Layout](#project-layout)
+- [Known Limitations](#known-limitations)
 - [Getting Started](#getting-started)
 - [Environment Variables](#environment-variables)
 - [Scripts](#scripts)
@@ -45,8 +48,9 @@ React UI for generating spec-compliant [llms.txt](https://llmstxt.org) files fro
 |-----------|------|------|
 | `GeneratorForm` | `components/homepage/generator-form/` | URL input, submit, error display; triggers generation |
 | `GenerationSteps` | `components/homepage/generator-form/` | Live step checklist during SSE progress |
-| `RecentScans` | `components/homepage/recent-scans/` | Lists persisted scans from `GET /scans`; links to analysis |
+| `RecentScans` | `components/homepage/recent-scans/` | Lists persisted scans from `GET /scans`; shows **Updated** badge when `has_unviewed_changes` is true |
 | `AnalysisOverview` + `StatCards` | `components/analysis/analysis-overview/` | Domain header, page counts, readiness summary, rescan action |
+| `CrawlWarning` | `components/analysis/crawl-warning/` | Warns when `readiness.js_rendering_likely` is true — see [Known Limitations](#known-limitations) |
 | `ReadinessScore` | `components/analysis/readiness-score/` | Category score bars and recommendations |
 | `CategoriesBreakdown` | `components/analysis/categories-breakdown/` | Expandable llms.txt section/page list |
 | `GeneratedOutput` | `components/analysis/generated-output/` | Preview, copy, and download llms.txt |
@@ -57,10 +61,38 @@ React UI for generating spec-compliant [llms.txt](https://llmstxt.org) files fro
 2. `useGenerate` POSTs to `/generate/stream` and parses SSE events via `readSseStream`.
 3. Progress events update `GenerationSteps` (`checking_access` → `discovering_pages` → `crawling` → `analyzing_readiness` → `generating`).
 4. On `complete`, the response is mapped to `AnalysisData`, seeded into the React Query cache, and the app navigates to `/analysis/:domain`.
-5. `Analysis` loads scan data with `useScan`, calls `useMarkViewed` on mount, and renders the overview, readiness, categories, and output panels.
+5. `Analysis` loads scan data with `useScan`, calls `useMarkViewed` on mount, and renders the overview, optional `CrawlWarning` (when JS-heavy crawl is detected), readiness, categories, and output panels.
 6. User can rescan from the analysis page via `useRecrawl`.
+7. Opening an analysis page calls `useMarkViewed`, which clears the **Updated** badge on the homepage.
 
 Key files: `hooks/useGenerate.ts`, `lib/readSseStream.ts`, `types/generation.ts`, `types/analysis.ts`.
+
+## Error cases
+
+`GeneratorForm` surfaces errors inline below the URL input. Common cases:
+
+- **Invalid URL** — client-side validation and `422` responses show: *"Please enter a valid URL starting with http:// or https://"*
+
+<img width="800" alt="Invalid URL error on homepage" src="../docs/homepage-error-invalid-url.png" />
+
+- **robots.txt blocked** — during the `checking_access` stage, the backend returns `robots_blocked` and the UI shows: *"This site's robots.txt blocks automated crawlers."*
+
+<img width="800" alt="robots.txt blocked error on homepage" src="../docs/homepage-error-robots-blocked.png" />
+
+Other backend error types (`timeout`, `no_pages`) follow the same pattern via `parseApiError` in `types/errors.ts`. See [backend README](../backend/README.md) for when each is raised.
+
+## Scheduled rescans
+
+The backend runs a background scheduler (default: every **24 hours**, checked every 15 minutes) that automatically re-crawls saved domains. When page URLs or content hashes differ from the last llms.txt generation baseline, the scheduler:
+
+1. Auto-regenerates llms.txt (if one already existed)
+2. Sets `has_unviewed_changes` on the domain
+
+`RecentScans` reads that flag and shows the **Updated** badge next to the domain on the homepage. The badge clears when the user opens the analysis page (`POST /scans/{domain}/mark-viewed`).
+
+Manual **Rescan** on the analysis page re-crawls on demand but does **not** set the badge — only the scheduler does. See [backend README §11](../backend/README.md#11-rescan--change-detection) for the full flow.
+
+<img width="800" alt="Updated badge on a recent scan after scheduled rescan" src="../docs/homepage-updated-badge.png" />
 
 ## Project Layout
 
@@ -77,6 +109,7 @@ src/
 │   │   └── recent-scans/
 │   └── analysis/
 │       ├── analysis-overview/
+│       ├── crawl-warning/
 │       ├── categories-breakdown/
 │       ├── generated-output/
 │       └── readiness-score/
@@ -93,6 +126,14 @@ src/
     ├── analysis.ts       # API response mappers
     └── generation.ts     # Progress step IDs
 ```
+
+## Known Limitations
+
+- **No JavaScript rendering** — the crawler reads raw HTML only. When the backend sets `readiness.js_rendering_likely`, the analysis page shows a `CrawlWarning` banner (e.g. on JS-heavy sites like Notion):
+
+<img width="800" alt="JavaScript crawl warning on notion.so" src="../docs/analysis-js-warning.png" />
+
+See [backend README](../backend/README.md#5-ai-readiness-score) for detection heuristics. Other crawl and generation limits are documented in the [root README](../README.md#known-limitations) and [backend README](../backend/README.md#known-limitations).
 
 ## Getting Started
 
