@@ -72,12 +72,12 @@ Key files: `hooks/useGenerate.ts`, `lib/readSseStream.ts`, `types/generation.ts`
 `GeneratorForm` surfaces errors inline below the URL input. Common cases:
 
 - **Invalid URL** — client-side validation and `422` responses show: *"Please enter a valid URL starting with http:// or https://"*
-
-<img width="800" alt="Invalid URL error on homepage" src="../docs/homepage-error-invalid-url.png" />
+- 
+<img width="800" alt="Invalid URL error on homepage" src="https://github.com/user-attachments/assets/2690d734-ac40-405c-a738-6d25e0c46f0d" />
 
 - **robots.txt blocked** — during the `checking_access` stage, the backend returns `robots_blocked` and the UI shows: *"This site's robots.txt blocks automated crawlers."*
-
-<img width="800" alt="robots.txt blocked error on homepage" src="../docs/homepage-error-robots-blocked.png" />
+  
+<img width="800" alt="robots.txt blocked error on homepage" src="https://github.com/user-attachments/assets/5a96fd30-30c6-4b86-90af-42c9b10a3f80" />
 
 Other backend error types (`timeout`, `no_pages`) follow the same pattern via `parseApiError` in `types/errors.ts`. See [backend README](../backend/README.md) for when each is raised.
 
@@ -92,7 +92,8 @@ The backend runs a background scheduler (default: every **24 hours**, checked ev
 
 Manual **Rescan** on the analysis page re-crawls on demand but does **not** set the badge — only the scheduler does. See [backend README §11](../backend/README.md#11-rescan--change-detection) for the full flow.
 
-<img width="800" alt="Updated badge on a recent scan after scheduled rescan" src="../docs/homepage-updated-badge.png" />
+<img width="800" alt="Updated badge on a recent scan after scheduled rescan" src="https://github.com/user-attachments/assets/e626e43c-f641-4c82-90be-ce191a6b7bb7" />
+
 
 ## Project Layout
 
@@ -130,8 +131,8 @@ src/
 ## Known Limitations
 
 - **No JavaScript rendering** — the crawler reads raw HTML only. When the backend sets `readiness.js_rendering_likely`, the analysis page shows a `CrawlWarning` banner (e.g. on JS-heavy sites like Notion):
-
-<img width="800" alt="JavaScript crawl warning on notion.so" src="../docs/analysis-js-warning.png" />
+  
+<img width="800" alt="JavaScript crawl warning on notion.so" src="https://github.com/user-attachments/assets/8078af58-198e-4c30-8b3f-f0c6cbc093c5" />
 
 See [backend README](../backend/README.md#5-ai-readiness-score) for detection heuristics. Other crawl and generation limits are documented in the [root README](../README.md#known-limitations) and [backend README](../backend/README.md#known-limitations).
 
